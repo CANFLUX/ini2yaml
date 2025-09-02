@@ -37,6 +37,10 @@ pytz==2025.2
     # via pandas
 pyyaml==6.0.2
     # via -r requirements.in
+ruamel-yaml==0.18.15
+    # via -r requirements.in
+ruamel-yaml-clib==0.2.12
+    # via ruamel-yaml
 scipy==1.15.3
     # via -r requirements.in
 six==1.17.0

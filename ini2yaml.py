@@ -1,18 +1,20 @@
 import re
 import os
 import sys
-import yaml
+from ruamel.yaml import YAML
+from ruamel.yaml.scalarstring import PlainScalarString
 from datetime import datetime,timedelta
 from dateutil.parser import parse as dateparse
 from dataclasses import dataclass,field
 from helperFunctions import updateDict,asdict_repr
+
+yaml = YAML()
 
 def set2string(obj,delim=','):
     if type(obj) is set:
         return(','.join(list(obj)))
     else:
         return(obj)
-    
 
 @dataclass(kw_only=True)
 class configuration:
@@ -36,7 +38,7 @@ class yamlConfig:
             if self.verbose:
                 print(self.config_path)
             with open(self.config_path) as f:
-                self.config_dict = yaml.safe_load(f)
+                self.config_dict = yaml.load(f)
 
 @dataclass(kw_only=True)
 class iniFile:
@@ -199,8 +201,8 @@ class parser:
         pattern = r"\[(.*?)\]"
         def replace_spaces_and_semicolons(m):
             inner = m.group(1)
-            inner = re.sub(r"\s*'\s*&\s*'\s*","'&'",inner.strip())
-            inner = re.sub(r'(?<=[^,])\s+(?=[^,])',',',inner).replace("'&'","+' & '+").replace(';,',';')
+            inner = re.sub(r"'\s*&\s*'*","'&'",inner.strip())
+            inner = re.sub(r'(?<=[^,])\s+(?=[^,])',',',inner).replace("'&'","' & '").replace(';,',';')
             if inner.count(';'):
                 inner = [inn for inn in inner.split(';') if len(inn.strip())>0]
                 if len(inner)==1:
@@ -244,23 +246,23 @@ class parser:
 
     def parse_globals(self):
         self.temp = {}
-        p_sub = {
-            # Replace globals at start of line (assumes max depth of 3)
-            r"globalVars\.(\w+)\s*=":r"temp_globalVars['\i']=",
-            # Replace recursive globals to right of equal sign
-            # Lists first
-            r"globalVars\.(\w+)\s*,":r"self.config.globalVars['\i'],",
-            r"globalVars\.(\w+)\s*\]":r"self.config.globalVars['\i']]",
-            # Singles next
-            r"globalVars\.(\w+)\s*\n":r"self.config.globalVars['\i']\n",
-            r"globalVars\.(\w+)\s*":r"self.config.globalVars['\i']"
-        }
-        for key,value in p_sub.items():
-            for i in range(3,0,-1):
-                k = key.replace(r'\.(\w+)',r'\.(\w+)'*i)
-                v = value.replace(r"['\i']",''.join([r"['\i']".replace('i',str(j+1)) for j in range(i)]))
-                pattern = re.compile(k)
-                self.text = pattern.sub(v,self.text)        
+        for i in range(3,0,-1):
+            pat = r"globalVars\.(\w+)".replace(r'\.(\w+)',r'\.(\w+)'*i)
+            # sub = subb.replace(r"['\i']",''.join([f"['\{j+1}']" for j in range(i)]))
+            fnd = re.findall(f"({pat})",self.text)
+            for f in fnd:
+                pat = "globalVars."+'.'.join(f[1:])
+                sub = "temp_globalVars"+''.join([f"['{g}']" for g in f[1:]])
+                cnt = self.text.count(f[0])
+                if cnt>1:
+                    anchor = ' = &'+'_'.join(f[1:])
+                    ref = "'*"+'_'.join(f[1:])+"'"
+                    print(ref)
+                    self.text = re.sub(pat+'\s*=\s*',sub+anchor+' ',self.text)    
+                    self.text = re.sub(pat,ref,self.text)     
+                else:
+                    self.text = re.sub(pat,sub,self.text,count=1) 
+            
         def make_temp(text):
             temp_globalVars = {}
             t = ''
@@ -269,21 +271,29 @@ class parser:
                     t = t+v+"']"
                     exec(t+'={}')
             return(temp_globalVars)
+        anchor_dict = {}
+        anchors = []
         for line in self.text.split('\n'):
             if line.startswith('temp_globalVars'):
                 obj,val = line.split('=',1)
                 temp_globalVars = make_temp(obj)
-                print(val)
-                '&'
+                if val.strip().startswith('&'):
+                    anchor_val = val.strip().split(' ')
+                    val = PlainScalarString(anchor_val[-1])
+                    val.yaml_set_anchor(anchor_val[0],always_dump=True)
+                    anchor_dict[anchor_val[0].strip('&')] = val
+                    anchors.append(anchor_val[0].strip('&'))
+                else:
+                    if any([a in val for a in anchors]):
+                        breakpoint()
                 val = set2string(eval(val))
                 exec(f"{obj}=val")
                 self.config.globalVars = updateDict.updateDict(self.config.globalVars,temp_globalVars)
 
-
     def write(self,outpath):
         print('Writing ',outpath)
-        with open(outpath,'w+') as f:
-            yaml.safe_dump(self.config.__dict__,f,sort_keys=False)
+        with open(outpath,'w+',encoding="utf-8") as f:
+            yaml.dump(self.config.__dict__,f)
         self.cleanKeys(outpath)
     
     def cleanKeys(self,outpath):
