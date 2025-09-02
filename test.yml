@@ -1,0 +1,5 @@
+a: &some_id
+  - 1
+  - 23
+b:
+  c: *some_id
