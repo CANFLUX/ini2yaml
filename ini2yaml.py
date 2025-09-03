@@ -2,7 +2,11 @@ import re
 import os
 import sys
 from ruamel.yaml import YAML
-from ruamel.yaml.comments import CommentedMap
+from ruamel.yaml.comments import CommentedMap, CommentedSeq
+from ruamel.yaml.scalarstring import PlainScalarString
+from ruamel.yaml.scalarint import ScalarInt
+from ruamel.yaml.scalarfloat import ScalarFloat
+from ruamel.yaml.scalarbool import ScalarBoolean
 from datetime import datetime,timedelta
 from dateutil.parser import parse as dateparse
 from dataclasses import dataclass,field
@@ -25,7 +29,6 @@ class configuration:
     globalVars: dict = field(default_factory=dict)
     Trace: dict = field(default_factory=dict)
     Include: dict = field(default_factory=dict)
-    # Comments: list = field(default_factory=lambda:[])
 
 @dataclass(kw_only=True)
 class yamlConfig:
@@ -253,7 +256,90 @@ class parser:
         self.text = self.text.strip()
 
     def parse_globals(self):
-        self.temp = {}
+        # extract globalVars
+        globalVars = '\n'.join([l for l in self.text.split('\n') if l.startswith('globalVars')])
+        for i in range(3,0,-1):
+            # Append . to end of each pattern to prevent partial matches
+            pat = r"globalVars\.(\w+)".replace(r'\.(\w+)',r'\.(\w+)'*i)
+            sub = "globalVars."+'.'.join([f"\{i+1}" for i in range(i)])+'.'
+            globalVars = re.sub(pat,sub,globalVars)
+            breakpoint()
+        # Convert to dict
+        globalVars = [l.split('=') for l in globalVars.split('\n')]
+        globalVars = {l[0].strip():l[-1].strip() for l in globalVars}
+        # Try to evaluate what can be evaluated
+        # Identify recursive values to be set as anchors eval it fails
+        for key,value in globalVars.items():
+            try:
+                globalVars[key] = eval(value)
+            except:
+                if 'globalVars' not in value:
+                    sys.exit(f"Line {sys._getframe().f_lineno} failed to parse non-recurvsive global var")
+                elif value.startswith('['):
+                    vlist = [v.strip() for v in value.strip('[]').split(',')]
+                    globalVars[key] = []
+                else:
+                    globalVars[key] = None
+                for i,v in enumerate(vlist):
+                    if v in globalVars.keys():
+                        # define ruamel.yaml anchors for assorted variable types
+                        # for recursive referencing
+                        if type(globalVars[v]) is list:
+                            globalVars[v] = CommentedSeq(globalVars[v])
+                            globalVars[v].yaml_set_anchor(v.replace('.','_').strip('_'))
+                        elif type(globalVars[v]) is dict:
+                            globalVars[v] = CommentedMap(globalVars[v])
+                            globalVars[v].yaml_set_anchor(v.replace('.','_').strip('_'))
+                        elif type(globalVars[v]) is str:
+                            globalVars[v] = PlainScalarString(globalVars[v])
+                            globalVars[v].yaml_set_anchor(v.replace('.','_').strip('_'))
+                        elif type(globalVars[v]) is int:
+                            globalVars[v] = ScalarInt(globalVars[v])
+                            globalVars[v].yaml_set_anchor(v.replace('.','_').strip('_'))
+                        elif type(globalVars[v]) is float:
+                            globalVars[v] = ScalarFloat(globalVars[v])
+                            globalVars[v].yaml_set_anchor(v.replace('.','_').strip('_'))
+                        elif type(globalVars[v]) is bool:
+                            globalVars[v] = ScalarBoolean(globalVars[v])
+                            globalVars[v].yaml_set_anchor(v.replace('.','_').strip('_'))
+                            
+                    # Assign anchors to recursive references
+                    if type(globalVars[key]) is list:
+                        if v in globalVars.keys():
+                            globalVars[key].append(globalVars[v])
+                        else:
+                            globalVars[key].append(eval(v))
+                    else:
+                        print(key,v)
+                        print()
+                        print(value)
+                        globalVars[key] = globalVars[v]
+                    
+        print(globalVars)
+        breakpoint()
+        sys.exit()
+        for i in range(3,0,-1):
+            pat = r"globalVars\.(\w+)".replace(r'\.(\w+)',r'\.(\w+)'*i)
+            sub = "globalVars"+''.join([f"['\{i+1}']" for i in range(i)])
+            sub = "globalVars"+'.'.join([f"\{i+1}" for i in range(i)])+'.'
+            self.text = re.sub(pat,sub,self.text)
+        
+        temp = [l.split('=') for l in self.text.split('\n') if l.strip().startswith('globalVars')]
+        temp = {l[0].strip():l[-1].strip() for l in temp}
+        globalVars = {}
+        for g,val in temp.items():
+            v = val
+            dependencies = [k for k in globalVars.keys() if k in val]
+            if len(dependencies):
+                print(dependencies)
+                for d in dependencies:
+                    v = v.replace(d,globalVars[d]['val'])
+            # print(v)
+            globalVars[g] = {'anchor': g.replace('.','_').strip('_'),
+                            'ref': val,
+                            'val': eval(v)}
+            
+            # print(g,v)
         ganchors = {}
         for i in range(3,0,-1):
             pat = r"globalVars\.(\w+)".replace(r'\.(\w+)',r'\.(\w+)'*i)
@@ -272,11 +358,11 @@ class parser:
             #         self.text = re.sub(pat+'\s*=\s*',sub+anchor+' ',self.text)    
             #         self.text = re.sub(pat,ref,self.text)     
             #     else:
-            print(pat)
-            print(sub)
+            # print(pat)
+            # print(sub)
             self.text = re.sub(pat,sub,self.text)#,count=1) 
-        print(self.text[:2000])
-        sys.exit()
+        # print(self.text[:2000])
+        # sys.exit()
         def make_temp(text):
             temp_globalVars = {}
             t = ''
@@ -290,7 +376,7 @@ class parser:
         for line in self.text.split('\n'):
             if line.startswith('temp_globalVars'):
                 obj,val = line.split('=',1)
-                # temp_globalVars = make_temp(obj)
+                temp_globalVars = make_temp(obj)
                 # if val.strip().startswith('&'):
                 #     anchor_val = val.strip().split(' ',1)
                 #     val = CommentedMap(anchor_val[-1])

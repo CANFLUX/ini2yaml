@@ -1,4 +1,6 @@
-base: &ANCHOR '[1, 2]'
+base: &ANCHOR
+- 1
+- 2
 object:
   tmp: *ANCHOR
   y: 2
