@@ -273,7 +273,7 @@ class parser:
         # Identify recursive values to be set as anchors eval it fails
         for key,value in globalVars.items():
             try:
-                globalVars[key] = eval(value)
+                globalVars[key] = set2string(eval(value))
             except:
                 if 'globalVars' not in value:
                     print(key,value)
@@ -290,22 +290,22 @@ class parser:
                         # for recursive referencing
                         if type(globalVars[v]) is list:
                             globalVars[v] = CommentedSeq(globalVars[v])
-                            globalVars[v].yaml_set_anchor(v.replace('.','_').strip('_'))
+                            globalVars[v].yaml_set_anchor(v.replace('.','_'),always_dump=True)
                         elif type(globalVars[v]) is dict:
                             globalVars[v] = CommentedMap(globalVars[v])
-                            globalVars[v].yaml_set_anchor(v.replace('.','_').strip('_'))
+                            globalVars[v].yaml_set_anchor(v.replace('.','_'),always_dump=True)
                         elif type(globalVars[v]) is str:
                             globalVars[v] = PlainScalarString(globalVars[v])
-                            globalVars[v].yaml_set_anchor(v.replace('.','_').strip('_'))
+                            globalVars[v].yaml_set_anchor(v.replace('.','_'),always_dump=True)
                         elif type(globalVars[v]) is int:
                             globalVars[v] = ScalarInt(globalVars[v])
-                            globalVars[v].yaml_set_anchor(v.replace('.','_').strip('_'))
+                            globalVars[v].yaml_set_anchor(v.replace('.','_'),always_dump=True)
                         elif type(globalVars[v]) is float:
                             globalVars[v] = ScalarFloat(globalVars[v])
-                            globalVars[v].yaml_set_anchor(v.replace('.','_').strip('_'))
+                            globalVars[v].yaml_set_anchor(v.replace('.','_'),always_dump=True)
                         elif type(globalVars[v]) is bool:
                             globalVars[v] = ScalarBoolean(globalVars[v])
-                            globalVars[v].yaml_set_anchor(v.replace('.','_').strip('_'))
+                            globalVars[v].yaml_set_anchor(v.replace('.','_'),always_dump=True)
                             
                     # Assign anchors to recursive references
                     if type(globalVars[key]) is list:
@@ -316,8 +316,20 @@ class parser:
                     else:
                         globalVars[key] = globalVars[v]
         # custom function for converting delimited strings to nested dict
-        globalVars = packDict.packDict(globalVars,format='.')#,verbose=self.verbose)
-        yaml.dump(globalVars,stream=sys.stdout)
+        globalVars = packDict.packDict(globalVars,format='.')
+        def sub_anchors(dct={},anc={}):
+            # Preserve ruamel anchors
+            for key,value in dct.items():
+                if type(value) is dict:
+                    dct[key],anc = sub_anchors(value,anc)
+                elif hasattr(value,'anchor'):
+                    if str(value.anchor) not in anc.keys():
+                        anc[str(value.anchor)] = value
+                        dct[key] = value
+                    else:
+                        dct[key] = anc[str(value.anchor)]
+            return(dct,anc)
+        globalVars,_ = sub_anchors(globalVars)
         self.config.globalVars = globalVars['globalVars']
 
     def write(self,outpath):
