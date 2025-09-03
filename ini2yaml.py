@@ -2,7 +2,7 @@ import re
 import os
 import sys
 from ruamel.yaml import YAML
-from ruamel.yaml.scalarstring import PlainScalarString
+from ruamel.yaml.comments import CommentedMap
 from datetime import datetime,timedelta
 from dateutil.parser import parse as dateparse
 from dataclasses import dataclass,field
@@ -124,7 +124,6 @@ class parser:
         else:
             sys.exit('Not a file: '+fname)
         self.clean_text()
-        # First read any embedded include files
         self.parse_globals()
         self.parse_traces()
         self.parse_includes()
@@ -163,7 +162,16 @@ class parser:
         # Convert to standard pythonic dates
         self.text = self.replace_datenum(text=self.text) 
         # Add commas to space delimited lists 
-        self.text = self.format_lists(text=self.text)      
+        self.text = self.format_lists(text=self.text)    
+        # Ensure all equal signs have space on each side
+        self.text = self.text.replace('=',' = ')
+        # Add spaces before/after brackets to make parsing simpler
+        self.text = self.text.replace('[',' [ ').replace(']',' ] ')
+        # Except for start/end blocks
+        self.text = self.text.replace(' [ End ] ','[End]').replace(' [ Trace ] ','[Trace]')
+        # replace all multi-spaces blocks with single white space
+        # self.text = self.text.replace('\t','\s')
+        self.text = re.sub(r'[ \t]+',' ',self.text)
 
     def replace_num2str(self,text):
         # Exclude comments, but preserve percent signs within strings
@@ -202,7 +210,7 @@ class parser:
         def replace_spaces_and_semicolons(m):
             inner = m.group(1)
             inner = re.sub(r"'\s*&\s*'*","'&'",inner.strip())
-            inner = re.sub(r'(?<=[^,])\s+(?=[^,])',',',inner).replace("'&'","' & '").replace(';,',';')
+            inner = re.sub(r'(?<=[^,;])\s+(?=[^,])',' , ',inner).replace("'&'","' & '")
             if inner.count(';'):
                 inner = [inn for inn in inner.split(';') if len(inn.strip())>0]
                 if len(inner)==1:
@@ -246,23 +254,29 @@ class parser:
 
     def parse_globals(self):
         self.temp = {}
+        ganchors = {}
         for i in range(3,0,-1):
             pat = r"globalVars\.(\w+)".replace(r'\.(\w+)',r'\.(\w+)'*i)
-            # sub = subb.replace(r"['\i']",''.join([f"['\{j+1}']" for j in range(i)]))
-            fnd = re.findall(f"({pat})",self.text)
-            for f in fnd:
-                pat = "globalVars."+'.'.join(f[1:])
-                sub = "temp_globalVars"+''.join([f"['{g}']" for g in f[1:]])
-                cnt = self.text.count(f[0])
-                if cnt>1:
-                    anchor = ' = &'+'_'.join(f[1:])
-                    ref = "'*"+'_'.join(f[1:])+"'"
-                    print(ref)
-                    self.text = re.sub(pat+'\s*=\s*',sub+anchor+' ',self.text)    
-                    self.text = re.sub(pat,ref,self.text)     
-                else:
-                    self.text = re.sub(pat,sub,self.text,count=1) 
-            
+            sub = "temp_globalVars"+''.join([f"['\{i+1}']" for i in range(i)])
+            # fnd = set(re.findall(f"({pat})",self.text))
+            # for f in fnd:
+            #     pat = "globalVars."+'.'.join(f[1:])
+            #     sub = "temp_globalVars"+''.join([f"['{g}']" for g in f[1:]])
+            #     cnt = self.text.count(f[0])
+            #     if cnt>1:
+            #         anchor = '_'.join(f[1:])
+            #         ln = [l for l in self.text.split('\n') if l.strip().startswith(pat)][-1]
+            #         ganchors[anchor] = CommentedMap()
+            #         ganchors[anchor] = 
+            #         breakpoint()
+            #         self.text = re.sub(pat+'\s*=\s*',sub+anchor+' ',self.text)    
+            #         self.text = re.sub(pat,ref,self.text)     
+            #     else:
+            print(pat)
+            print(sub)
+            self.text = re.sub(pat,sub,self.text)#,count=1) 
+        print(self.text[:2000])
+        sys.exit()
         def make_temp(text):
             temp_globalVars = {}
             t = ''
@@ -276,16 +290,20 @@ class parser:
         for line in self.text.split('\n'):
             if line.startswith('temp_globalVars'):
                 obj,val = line.split('=',1)
-                temp_globalVars = make_temp(obj)
-                if val.strip().startswith('&'):
-                    anchor_val = val.strip().split(' ')
-                    val = PlainScalarString(anchor_val[-1])
-                    val.yaml_set_anchor(anchor_val[0],always_dump=True)
-                    anchor_dict[anchor_val[0].strip('&')] = val
-                    anchors.append(anchor_val[0].strip('&'))
-                else:
-                    if any([a in val for a in anchors]):
-                        breakpoint()
+                # temp_globalVars = make_temp(obj)
+                # if val.strip().startswith('&'):
+                #     anchor_val = val.strip().split(' ',1)
+                #     val = CommentedMap(anchor_val[-1])
+                #     print(val)
+                #     sys.exit()
+                #     val.yaml_set_anchor(anchor_val[0],always_dump=True)
+                #     anchor_dict[anchor_val[0].strip('&')] = val
+                #     anchors.append(anchor_val[0].strip('&'))
+                # else:
+                #     for anchor in [anchors[i] for i,a in enumerate(anchors) if a in val]:
+                #         val = val.replace("'*"+anchor+" '",anchor_dict[anchor])
+                # print(type(val))
+                print(val)
                 val = set2string(eval(val))
                 exec(f"{obj}=val")
                 self.config.globalVars = updateDict.updateDict(self.config.globalVars,temp_globalVars)
