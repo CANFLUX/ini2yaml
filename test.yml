@@ -1,5 +1,4 @@
-a: &some_id
-  - 1
-  - 23
-b:
-  c: *some_id
+base: &ANCHOR '[1, 2]'
+object:
+  tmp: *ANCHOR
+  y: 2
