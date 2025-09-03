@@ -10,7 +10,7 @@ from ruamel.yaml.scalarbool import ScalarBoolean
 from datetime import datetime,timedelta
 from dateutil.parser import parse as dateparse
 from dataclasses import dataclass,field
-from helperFunctions import updateDict,asdict_repr
+from helperFunctions import asdict_repr,packDict
 
 yaml = YAML()
 
@@ -258,15 +258,17 @@ class parser:
     def parse_globals(self):
         # extract globalVars
         globalVars = '\n'.join([l for l in self.text.split('\n') if l.startswith('globalVars')])
+        if not len(globalVars):
+            return
         for i in range(3,0,-1):
-            # Append . to end of each pattern to prevent partial matches
+            # Append ~! to end of each pattern to prevent partial matches
             pat = r"globalVars\.(\w+)".replace(r'\.(\w+)',r'\.(\w+)'*i)
-            sub = "globalVars."+'.'.join([f"\{i+1}" for i in range(i)])+'.'
+            sub = r"globalVariables."+r'.'.join([fr"\{i+1}" for i in range(i)])+r'~!'
             globalVars = re.sub(pat,sub,globalVars)
-            breakpoint()
+        globalVars = globalVars.replace('globalVariables','globalVars').replace('~!','')
         # Convert to dict
-        globalVars = [l.split('=') for l in globalVars.split('\n')]
-        globalVars = {l[0].strip():l[-1].strip() for l in globalVars}
+        globalVars = [l.split('=',1) for l in globalVars.split('\n')]
+        globalVars = {l[0].strip():l[-1].strip() for l in globalVars if l[0].strip() != ''}
         # Try to evaluate what can be evaluated
         # Identify recursive values to be set as anchors eval it fails
         for key,value in globalVars.items():
@@ -274,12 +276,14 @@ class parser:
                 globalVars[key] = eval(value)
             except:
                 if 'globalVars' not in value:
+                    print(key,value)
                     sys.exit(f"Line {sys._getframe().f_lineno} failed to parse non-recurvsive global var")
                 elif value.startswith('['):
                     vlist = [v.strip() for v in value.strip('[]').split(',')]
                     globalVars[key] = []
                 else:
                     globalVars[key] = None
+                    vlist = [value]
                 for i,v in enumerate(vlist):
                     if v in globalVars.keys():
                         # define ruamel.yaml anchors for assorted variable types
@@ -310,89 +314,11 @@ class parser:
                         else:
                             globalVars[key].append(eval(v))
                     else:
-                        print(key,v)
-                        print()
-                        print(value)
                         globalVars[key] = globalVars[v]
-                    
-        print(globalVars)
-        breakpoint()
-        sys.exit()
-        for i in range(3,0,-1):
-            pat = r"globalVars\.(\w+)".replace(r'\.(\w+)',r'\.(\w+)'*i)
-            sub = "globalVars"+''.join([f"['\{i+1}']" for i in range(i)])
-            sub = "globalVars"+'.'.join([f"\{i+1}" for i in range(i)])+'.'
-            self.text = re.sub(pat,sub,self.text)
-        
-        temp = [l.split('=') for l in self.text.split('\n') if l.strip().startswith('globalVars')]
-        temp = {l[0].strip():l[-1].strip() for l in temp}
-        globalVars = {}
-        for g,val in temp.items():
-            v = val
-            dependencies = [k for k in globalVars.keys() if k in val]
-            if len(dependencies):
-                print(dependencies)
-                for d in dependencies:
-                    v = v.replace(d,globalVars[d]['val'])
-            # print(v)
-            globalVars[g] = {'anchor': g.replace('.','_').strip('_'),
-                            'ref': val,
-                            'val': eval(v)}
-            
-            # print(g,v)
-        ganchors = {}
-        for i in range(3,0,-1):
-            pat = r"globalVars\.(\w+)".replace(r'\.(\w+)',r'\.(\w+)'*i)
-            sub = "temp_globalVars"+''.join([f"['\{i+1}']" for i in range(i)])
-            # fnd = set(re.findall(f"({pat})",self.text))
-            # for f in fnd:
-            #     pat = "globalVars."+'.'.join(f[1:])
-            #     sub = "temp_globalVars"+''.join([f"['{g}']" for g in f[1:]])
-            #     cnt = self.text.count(f[0])
-            #     if cnt>1:
-            #         anchor = '_'.join(f[1:])
-            #         ln = [l for l in self.text.split('\n') if l.strip().startswith(pat)][-1]
-            #         ganchors[anchor] = CommentedMap()
-            #         ganchors[anchor] = 
-            #         breakpoint()
-            #         self.text = re.sub(pat+'\s*=\s*',sub+anchor+' ',self.text)    
-            #         self.text = re.sub(pat,ref,self.text)     
-            #     else:
-            # print(pat)
-            # print(sub)
-            self.text = re.sub(pat,sub,self.text)#,count=1) 
-        # print(self.text[:2000])
-        # sys.exit()
-        def make_temp(text):
-            temp_globalVars = {}
-            t = ''
-            for v in text.split("']"):
-                if len(v.strip())>0:
-                    t = t+v+"']"
-                    exec(t+'={}')
-            return(temp_globalVars)
-        anchor_dict = {}
-        anchors = []
-        for line in self.text.split('\n'):
-            if line.startswith('temp_globalVars'):
-                obj,val = line.split('=',1)
-                temp_globalVars = make_temp(obj)
-                # if val.strip().startswith('&'):
-                #     anchor_val = val.strip().split(' ',1)
-                #     val = CommentedMap(anchor_val[-1])
-                #     print(val)
-                #     sys.exit()
-                #     val.yaml_set_anchor(anchor_val[0],always_dump=True)
-                #     anchor_dict[anchor_val[0].strip('&')] = val
-                #     anchors.append(anchor_val[0].strip('&'))
-                # else:
-                #     for anchor in [anchors[i] for i,a in enumerate(anchors) if a in val]:
-                #         val = val.replace("'*"+anchor+" '",anchor_dict[anchor])
-                # print(type(val))
-                print(val)
-                val = set2string(eval(val))
-                exec(f"{obj}=val")
-                self.config.globalVars = updateDict.updateDict(self.config.globalVars,temp_globalVars)
+        # custom function for converting delimited strings to nested dict
+        globalVars = packDict.packDict(globalVars,format='.')#,verbose=self.verbose)
+        yaml.dump(globalVars,stream=sys.stdout)
+        self.config.globalVars = globalVars['globalVars']
 
     def write(self,outpath):
         print('Writing ',outpath)
