@@ -121,16 +121,26 @@ class Trace:
                     v = v.strip().encode('unicode_escape').decode()
                 try:
                     v = v.replace('\n',' ')
-                    print(v)
                     self.__dict__[k] = eval(v.strip()) 
-                    if not type(self.__dict__[k])==v.type:
-                        print('\n\n\n!!! Warning !!!')
-                        print(f'Check type for {self.__dict__['variableName']}:{k}')
-                        print('!!!\n\n\n')
-                        breakpoint()
+                    if k not in self.__dataclass_fields__ and not fields_on_the_fly:
+                        print(f"Field {k} is not a default field, run with fields_on_the_fly=True to allow for dynamic field generation, or edit the source code ...")
+                    elif not type(self.__dict__[k])==self.__dataclass_fields__[k].type:
+                        try:
+                            if self.__dataclass_fields__[k].type in [str,float,int] and len(self.__dict__[k]) == 0:
+                                self.__dict__[k] = self.__dataclass_fields__[k].default
+                            elif len(self.__dict__[k]) == 0:
+                                self.__dict__[k] = self.__dataclass_fields__[k].default_factory()
+                            else:
+                                a = 1/0
+                        except:
+                            print('\n\n\n!!! Warning !!!')
+                            print(f'Check type for {self.__dict__['variableName']}:{k}')
+                            print('!!!\n\n\n')
+                            breakpoint()
                 except:
                     print(f'Error in key "{k}" could not parse {v}, see traceblock for possible errors:')
                     print(ini_string)
+                    breakpoint()
             # convert any matlab cells (read in python as sets) to comma delimited string
             self.__dict__[k] = safeString(self.__dict__[k])
         if fields_on_the_fly:
