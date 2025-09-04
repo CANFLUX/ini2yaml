@@ -7,9 +7,11 @@ importlib.reload(ini2yaml)
 root = r'C:\Users\jskeeter\gsc-permafrost'
 root = 'C:\\'
 old_ini_path = os.path.join(root,r'Database\Calculation_Procedures\TraceAnalysis_ini')
-SiteID = 'DSM'
-stage = 'firststage'
-i2y = ini2yaml.parser(root=old_ini_path,SiteID=SiteID,stage=stage)
+siteList = ['BB','BB2','BBS','DSM','RBM','HOGG','OHM','YOUNG']
+for SiteID in siteList:
+    for stage in ['firststage','secondstage']:
+        print(f'Site: {SiteID}, stage: {stage}')
+        i2y = ini2yaml.parser(root=old_ini_path,SiteID=SiteID,stage=stage)
 # print([l.strip() for l in i2y.text.split('\n')])
 # print(i2y.config.globalVars)
 

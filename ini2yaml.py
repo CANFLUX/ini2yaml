@@ -69,25 +69,32 @@ class iniFile:
 @dataclass(kw_only=True)
 class Trace:
     # The expected fields and their corresponding types for a trace object
-    variableName: str = None
-    title: str = None
-    originalVariable: str = None
+    variableName: str = ''
+    title: str = ''
+    originalVariable: str = ''
     inputFileName: str = field(default_factory=lambda:{})
     inputFileName_dates: list = field(default_factory=lambda:[])
-    measurementType: str = None
-    units: str = None
-    instrument: str = None
-    instrumentType: str = None
-    instrumentSN: str = None
+    measurementType: str = ''
+    units: str = ''
+    instrument: str = ''
+    instrumentType: str = ''
+    instrumentSN: str = ''
     calibrationDates: list = field(default_factory=lambda:[],repr=False) # depreciated settings to be parsed but not written
     loggedCalibration: list = field(default_factory=lambda:[])
     currentCalibration: list = field(default_factory=lambda:[])
     minMax: list = field(default_factory=lambda:[])
     clamped_minMax: list = field(default_factory=lambda:[])
     zeroPt: list = field(default_factory=lambda:[])
-    comments: str = None
-    dependent: str = None
-    Evaluate: str = None
+    comments: str = ''
+    dependent: str = ''
+    plotBottomRight: str = field(default=None,repr=False) # depreciated settings to be parsed but not written
+    plotBottomLeft: str = field(default=None,repr=False) # depreciated settings to be parsed but not written
+    plotTopRight: str = field(default=None,repr=False) # depreciated settings to be parsed but not written
+    plotTopLeft: str = field(default=None,repr=False) # depreciated settings to be parsed but not written
+    outputName: str = field(default=None,repr=False) # depreciated settings to be parsed but not written
+    Ameriflux_Variable: str = field(default=None,repr=False) # depreciated? settings to be parsed but not written
+    Ameriflux_DataType: str = field(default=None,repr=False) # depreciated? settings to be parsed but not written
+    Evaluate: str = ''
 
     def parse_from_ini_string(self,ini_string):
         # parse the trace from an ini file
@@ -96,6 +103,7 @@ class Trace:
         NaN = float('NaN')
         keys = self.__dataclass_fields__.keys()
         patterns = [key + r'\s*=' for key in keys]
+        ini_string_og = ini_string
         for pattern,key in zip(patterns,keys):
             ini_string = re.sub(pattern,f'~key~{key}~value~',ini_string.strip())
         split_string = re.split('~key~|~value~',ini_string)
@@ -108,12 +116,16 @@ class Trace:
             else:
                 if k == 'units':
                     v = v.strip().encode('unicode_escape').decode()
-                self.__dict__[k] = eval(v.strip())    
+                try:
+                    v = v.replace('\n',' ')
+                    self.__dict__[k] = eval(v.strip())    
+                except:
+                    print(f'Error in key "{k}" could not parse {v}, see traceblock for possible errors:')
+                    print(ini_string_og)
+                    breakpoint()
             # convert any matlab cells (read in python as sets) to comma delimited string
             self.__dict__[k] = safeString(self.__dict__[k])
 
-    def dump_to_ini_string(self,config):
-        pass
 
 @dataclass
 class parser:
@@ -169,7 +181,7 @@ class parser:
                 return '\n'
         self.text = re.sub(pattern, replacer, self.ini_string)
         # Delete blank lines
-        self.text = '\n'.join([l.strip() for l in self.text.split('\n') if len(l.strip())])
+        self.text = '\n'.join([l.strip() for l in self.text.split('\n') if len(l.strip()) and not l.startswith(';')])
         # Replace functions names which are directly translatable to python
         self.text = self.replace_num2str(text=self.text)
         # Convert to standard pythonic dates
