@@ -5,9 +5,9 @@ importlib.reload(ini2yaml)
 
 # root = r'C:\Users\jskeeter\OneDrive - NRCan RNCan\Documents\DataTansfers'
 root = r'C:\Users\jskeeter\gsc-permafrost'
-# root = 'C:\\'
+root = 'C:\\'
 old_ini_path = os.path.join(root,r'Database\Calculation_Procedures\TraceAnalysis_ini')
-SiteID = 'BB'
+SiteID = 'DSM'
 stage = 'firststage'
 i2y = ini2yaml.parser(root=old_ini_path,SiteID=SiteID,stage=stage)
 # print([l.strip() for l in i2y.text.split('\n')])

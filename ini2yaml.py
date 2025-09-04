@@ -3,7 +3,7 @@ import os
 import sys
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
-from ruamel.yaml.scalarstring import PlainScalarString
+from ruamel.yaml.scalarstring import PlainScalarString, SingleQuotedScalarString
 from ruamel.yaml.scalarint import ScalarInt
 from ruamel.yaml.scalarfloat import ScalarFloat
 from ruamel.yaml.scalarbool import ScalarBoolean
@@ -14,11 +14,21 @@ from helperFunctions import asdict_repr,packDict
 
 yaml = YAML()
 
-def set2string(obj,delim=','):
+def safeString(obj,delim=','):
+    def check_reserved_words(s):
+        # Some words are parsed to bool in different yaml interpreters
+        # If code is expecting 'on' and gets a bool, will cause issues.
+        # Use sparingly, only for words needed.  By default, these words will be converted 
+        # y|Y|yes|Yes|YES|n|N|no|No|NO|
+        # true|True|TRUE|false|False|FALSE|
+        # on|On|ON|off|Off|OFF
+        if type(s) is str and s.lower() in ['on','off']:
+            s = SingleQuotedScalarString(s)
+        return(s)
     if type(obj) is set:
-        return(','.join(list(obj)))
+        return(','.join(list(check_reserved_words(obj))))
     else:
-        return(obj)
+        return(check_reserved_words(obj))
 
 @dataclass(kw_only=True)
 class configuration:
@@ -100,7 +110,7 @@ class Trace:
                     v = v.strip().encode('unicode_escape').decode()
                 self.__dict__[k] = eval(v.strip())    
             # convert any matlab cells (read in python as sets) to comma delimited string
-            self.__dict__[k] = set2string(self.__dict__[k])
+            self.__dict__[k] = safeString(self.__dict__[k])
 
     def dump_to_ini_string(self,config):
         pass
@@ -173,15 +183,15 @@ class parser:
         # Except for start/end blocks
         self.text = self.text.replace(' [ End ] ','[End]').replace(' [ Trace ] ','[Trace]')
         # replace all multi-spaces blocks with single white space
-        # self.text = self.text.replace('\t','\s')
         self.text = re.sub(r'[ \t]+',' ',self.text)
+    
 
     def replace_num2str(self,text):
         # Exclude comments, but preserve percent signs within strings
         pattern = r'\s*num2str\((.*?)\)\s*'
         def replacer(match):
             inner = match.group(1) 
-            return (f"+str({inner})+")
+            return (f" {inner} ")
         return(re.sub(pattern, replacer, text))
 
 
@@ -222,15 +232,16 @@ class parser:
                     inner ='['+('],['.join(inner))+']'
             return (f'[{inner}]')
         fmtd = re.sub(pattern,replace_spaces_and_semicolons,text)
+        # Get rid of quoted lists if they exist
         pattern = r"'\[(.*?)\]'"
         def replace_quotes(m):
             return(f'[{m.group(1)}]')
         fmtd = re.sub(pattern,replace_quotes,fmtd)
-        # convert {[..]} to {}, cells parsed as sets, can't contain lists
+        # convert {[..]} to [..]
         pattern = r"{\[(.*?)\]}"
-        def replace_quotes(m):
-            return('{'+m.group(1)+'}')
-        fmtd = re.sub(pattern,replace_quotes,fmtd)
+        def clip_brackets(m):
+            return('['+m.group(1)+']')
+        fmtd = re.sub(pattern,clip_brackets,fmtd)
         return(fmtd)
 
     def parse_includes(self):
@@ -273,7 +284,7 @@ class parser:
         # Identify recursive values to be set as anchors eval it fails
         for key,value in globalVars.items():
             try:
-                globalVars[key] = set2string(eval(value))
+                globalVars[key] = safeString(eval(value))
             except:
                 if 'globalVars' not in value:
                     print(key,value)
@@ -319,15 +330,28 @@ class parser:
         globalVars = packDict.packDict(globalVars,format='.')
         def sub_anchors(dct={},anc={}):
             # Preserve ruamel anchors
-            for key,value in dct.items():
-                if type(value) is dict:
-                    dct[key],anc = sub_anchors(value,anc)
-                elif hasattr(value,'anchor'):
-                    if str(value.anchor) not in anc.keys():
-                        anc[str(value.anchor)] = value
-                        dct[key] = value
-                    else:
-                        dct[key] = anc[str(value.anchor)]
+            if type(dct) is dict:
+                for key,value in dct.items():
+                    if type(value) is dict:
+                        dct[key],anc = sub_anchors(value,anc)
+                    elif hasattr(value,'anchor'):
+                        if str(value.anchor) not in anc.keys():
+                            anc[str(value.anchor)] = value
+                            dct[key] = value
+                        else:
+                            dct[key] = anc[str(value.anchor)]
+                    elif type(value) is list:
+                        dct[key],anc = sub_anchors(value,anc)
+            elif type(dct) is list:
+                for i,value in enumerate(dct):
+                    if type(value) is list:
+                        dct[i],anc = sub_anchors(value,anc)
+                    elif hasattr(value,'anchor'):
+                        if str(value.anchor) not in anc.keys():
+                            anc[str(value.anchor)] = value
+                            dct[i] = value
+                        else:
+                            dct[i] = anc[str(value.anchor)]
             return(dct,anc)
         globalVars,_ = sub_anchors(globalVars)
         self.config.globalVars = globalVars['globalVars']
