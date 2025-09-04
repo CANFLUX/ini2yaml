@@ -134,7 +134,7 @@ class Trace:
                                 a = 1/0
                         except:
                             print('\n\n\n!!! Warning !!!')
-                            print(f'Check type for {self.__dict__['variableName']}:{k}')
+                            print(f'Check type for {self.__dict__["variableName"]}:{k}')
                             print('!!!\n\n\n')
                             breakpoint()
                 except:
