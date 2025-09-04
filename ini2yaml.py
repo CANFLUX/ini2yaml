@@ -292,7 +292,7 @@ class parser:
             includes = [line for line in self.text.splitlines() if line.startswith('#include')]
             for include in includes:
                 fname = include.split('#include')[-1].strip()
-                self.config.Include[fname.split('.')[0]] = parser(root=self.root,include=fname,verbose=self.verbose).config.Trace
+                self.config.Include[fname.split('.')[0]] = parser(root=self.root,include=fname,stage=self.stage,verbose=self.verbose).config.Trace
                 # Remove lines which have been processed
                 self.text = self.text.replace(include,' ')
     
