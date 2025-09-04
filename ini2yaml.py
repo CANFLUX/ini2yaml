@@ -9,7 +9,7 @@ from ruamel.yaml.scalarfloat import ScalarFloat
 from ruamel.yaml.scalarbool import ScalarBoolean
 from datetime import datetime,timedelta
 from dateutil.parser import parse as dateparse
-from dataclasses import dataclass,field
+from dataclasses import dataclass,field, MISSING, _MISSING_TYPE
 from helperFunctions import asdict_repr,packDict
 
 yaml = YAML()
@@ -66,50 +66,53 @@ class iniFile:
             with open(self.ini_path) as f:
                 self.ini_string = f.read()
 
+
 @dataclass(kw_only=True)
 class Trace:
     # The expected fields and their corresponding types for a trace object
-    variableName: str = ''
-    title: str = ''
-    originalVariable: str = ''
-    inputFileName: str = field(default_factory=lambda:{})
-    inputFileName_dates: list = field(default_factory=lambda:[])
-    measurementType: str = ''
-    units: str = ''
-    instrument: str = ''
-    instrumentType: str = ''
-    instrumentSN: str = ''
-    calibrationDates: list = field(default_factory=lambda:[],repr=False) # depreciated settings to be parsed but not written
-    loggedCalibration: list = field(default_factory=lambda:[])
-    currentCalibration: list = field(default_factory=lambda:[])
-    minMax: list = field(default_factory=lambda:[])
-    clamped_minMax: list = field(default_factory=lambda:[])
-    zeroPt: list = field(default_factory=lambda:[])
-    comments: str = ''
-    dependent: str = ''
-    plotBottomRight: str = field(default=None,repr=False) # depreciated settings to be parsed but not written
-    plotBottomLeft: str = field(default=None,repr=False) # depreciated settings to be parsed but not written
-    plotTopRight: str = field(default=None,repr=False) # depreciated settings to be parsed but not written
-    plotTopLeft: str = field(default=None,repr=False) # depreciated settings to be parsed but not written
-    outputName: str = field(default=None,repr=False) # depreciated settings to be parsed but not written
-    Ameriflux_Variable: str = field(default=None,repr=False) # depreciated? settings to be parsed but not written
-    Ameriflux_DataType: str = field(default=None,repr=False) # depreciated? settings to be parsed but not written
-    Evaluate: str = ''
+    variableName: str = field(default='', metadata={'stage': 'common'})
+    title: str = field(default='', metadata={'stage': 'common'})
+    originalVariable: str = field(default='', metadata={'stage': 'firststage'})
+    inputFileName: set = field(default_factory=str, metadata={'stage': 'firststage'})
+    inputFileName_dates: list = field(default_factory=list, metadata={'stage': 'firststage'})
+    measurementType: str = field(default='', metadata={'stage': 'firststage'})
+    units: str = field(default='', metadata={'stage': 'common'})
+    instrument: str = field(default='', metadata={'stage': 'firststage'})
+    instrumentType: str = field(default='', metadata={'stage': 'firststage'})
+    instrumentSN: str = field(default='', metadata={'stage': 'firststage'})
+    loggedCalibration: list = field(default_factory=list, metadata={'stage': 'firststage'})
+    currentCalibration: list = field(default_factory=list, metadata={'stage': 'firststage'})
+    minMax: list = field(default_factory=list, metadata={'stage': 'firststage'})
+    clamped_minMax: list = field(default_factory=list, metadata={'stage': 'firststage'})
+    zeroPt: list = field(default_factory=list, metadata={'stage': 'firststage'})
+    comments: str = field(default='', metadata={'stage': 'firststage'})
+    dependent: str = field(default='', metadata={'stage': 'firststage'})
+    Evaluate: str = field(default='', metadata={'stage': 'secondstage'})
 
-    def parse_from_ini_string(self,ini_string):
+    def parse_from_ini_string(self,ini_string,stage='firststage',fields_on_the_fly=False):
+        # A bit hack-key, remove appended fields from previous instance
+        # adding fields on the fly ensure the non-standard keys are transferred to the new yaml files
+        if fields_on_the_fly:
+            flds = list(self.__dataclass_fields__.keys())
+            for k in flds:
+                if k not in self.__dict__.keys():
+                    self.__dataclass_fields__.pop(k)
+        # reset repr in case it was turned off in previous instance
+        for k in self.__dataclass_fields__:
+            self.__dataclass_fields__[k].repr=True
         # parse the trace from an ini file
         # Define python versions of matlab keywords
+        lb_key = '~linebreak~'
         Inf = float('inf')
         NaN = float('NaN')
-        keys = self.__dataclass_fields__.keys()
-        patterns = [key + r'\s*=' for key in keys]
-        ini_string_og = ini_string
-        for pattern,key in zip(patterns,keys):
-            ini_string = re.sub(pattern,f'~key~{key}~value~',ini_string.strip())
-        split_string = re.split('~key~|~value~',ini_string)
-        split_string = [t for t in split_string if t.strip()!='']
-        out = {k:v for k,v in zip(split_string[::2],split_string[1::2])}
-        for k,v in out.items():
+        new_string = ''
+        pattern = r"'(.*?)'"
+        def lb_replacer(match):
+            return(match[0].replace('\n',lb_key))
+        new_string = re.sub(pattern,lb_replacer,ini_string, flags=re.DOTALL)
+        key_val_pairs = {l.split('=',1)[0].strip():l.split('=',1)[-1].strip() for l in new_string.split('\n') if '=' in l and not l.strip().startswith('%')}
+        for k,v in key_val_pairs.items():
+            v = v.replace(lb_key,'\n')
             if k == 'Evaluate':
                 # don't evaluate these strings
                 self.__dict__[k] = v.strip().strip("'")
@@ -118,13 +121,29 @@ class Trace:
                     v = v.strip().encode('unicode_escape').decode()
                 try:
                     v = v.replace('\n',' ')
-                    self.__dict__[k] = eval(v.strip())    
+                    print(v)
+                    self.__dict__[k] = eval(v.strip()) 
+                    if not type(self.__dict__[k])==v.type:
+                        print('\n\n\n!!! Warning !!!')
+                        print(f'Check type for {self.__dict__['variableName']}:{k}')
+                        print('!!!\n\n\n')
+                        breakpoint()
                 except:
                     print(f'Error in key "{k}" could not parse {v}, see traceblock for possible errors:')
-                    print(ini_string_og)
-                    breakpoint()
+                    print(ini_string)
             # convert any matlab cells (read in python as sets) to comma delimited string
             self.__dict__[k] = safeString(self.__dict__[k])
+        if fields_on_the_fly:
+            for k in self.__dict__:
+                if k not in self.__dataclass_fields__:
+                    self.__dataclass_fields__[k] = field(metadata={'stage':'non-standard'})
+        for k,v in self.__dataclass_fields__.items():
+            if v.metadata['stage'] != stage and v.metadata['stage'] != 'common':
+                if self.__dict__[k] == v.default:
+                    self.__dataclass_fields__[k].repr=False
+                elif v.default_factory is not MISSING and self.__dict__[k] == v.default_factory():
+                    self.__dataclass_fields__[k].repr=False
+
 
 
 @dataclass
@@ -134,6 +153,7 @@ class parser:
     stage: str = None
     include: str = None
     verbose: bool = True
+    fields_on_the_fly = False # If true, will allow non-standard fields which are not declared explicitly in Trace class
 
     def __post_init__(self):
         self.config = configuration(SiteID=self.SiteID)
@@ -181,7 +201,7 @@ class parser:
                 return '\n'
         self.text = re.sub(pattern, replacer, self.ini_string)
         # Delete blank lines
-        self.text = '\n'.join([l.strip() for l in self.text.split('\n') if len(l.strip()) and not l.startswith(';')])
+        self.text = '\n'.join([l.strip() for l in self.text.split('\n') if len(l.strip()) and not l.strip().startswith(';')])
         # Replace functions names which are directly translatable to python
         self.text = self.replace_num2str(text=self.text)
         # Convert to standard pythonic dates
@@ -273,7 +293,7 @@ class parser:
         self.trace_blocks = []
         for match in matches:
             trace = Trace()
-            trace.parse_from_ini_string(match)
+            trace.parse_from_ini_string(match,stage=self.stage,fields_on_the_fly=self.fields_on_the_fly)
             self.config.Trace[trace.variableName] = asdict_repr.asdict_repr(trace)
             self.text = self.text.replace(f'[Trace]{match}[End]','')
         self.text = self.text.strip()
