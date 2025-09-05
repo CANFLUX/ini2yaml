@@ -27,31 +27,18 @@ def safeString(obj,delim=','):
         return(s)
     if type(obj) is set:
         return(','.join(list(check_reserved_words(obj))))
+    elif type(obj) is dict and not len(obj):
+        return(None)
+
     else:
         return(check_reserved_words(obj))
 
 @dataclass(kw_only=True)
 class configuration:
-    Site_name: str = None
-    SiteID: str = None
-    Difference_GMT_to_local_time: int = None
-    Timezone: int = None
+    metadata: dict = field(default_factory=dict)
     globalVars: dict = field(default_factory=dict)
     Trace: dict = field(default_factory=dict)
     Include: dict = field(default_factory=dict)
-
-@dataclass(kw_only=True)
-class yamlConfig:
-    verbose: bool = True
-    config_path: str = None
-    config_dict: dict = None
-
-    def __post_init__(self):
-        if self.config_path and os.path.isfile(self.config_path):
-            if self.verbose:
-                print(self.config_path)
-            with open(self.config_path) as f:
-                self.config_dict = yaml.load(f)
 
 @dataclass(kw_only=True)
 class iniFile:
@@ -89,7 +76,7 @@ class Trace:
     dependent: str = field(default='', metadata={'stage': 'firststage'})
     Evaluate: str = field(default='', metadata={'stage': 'secondstage'})
 
-    def parse_from_ini_string(self,ini_string,stage='firststage',fields_on_the_fly=False):
+    def parse_from_ini_string(self,ini_string,stage='firststage',fields_on_the_fly=False,verbose=False):
         # A bit hack-key, remove appended fields from previous instance
         # adding fields on the fly ensure the non-standard keys are transferred to the new yaml files
         if fields_on_the_fly:
@@ -114,7 +101,17 @@ class Trace:
         for k,v in key_val_pairs.items():
             v = v.replace(lb_key,'\n')
             if k == 'Evaluate':
-                # don't evaluate these strings
+                # don't evaluate these strings, re-add datenum calls for Evaluate compatibility
+                pattern = r'datetime\((.*?)\)'
+                def add_datenum(m):
+                    if ',' not in m.group(1):
+                        try:
+                            test = datetime(m.group(1))
+                            return(f"datenum({m.group(0)})")
+                        except:
+                            pass
+                    return(m.group(0))
+                v = re.sub(pattern,add_datenum,v)
                 self.__dict__[k] = v.strip().strip("'")
             else:
                 if k == 'units':
@@ -122,7 +119,7 @@ class Trace:
                 try:
                     v = v.replace('\n',' ')
                     self.__dict__[k] = eval(v.strip()) 
-                    if k not in self.__dataclass_fields__ and not fields_on_the_fly:
+                    if k not in self.__dataclass_fields__ and not fields_on_the_fly and verbose:
                         print(f"Field {k} is not a default field, run with fields_on_the_fly=True to allow for dynamic field generation, or edit the source code ...")
                     elif not type(self.__dict__[k])==self.__dataclass_fields__[k].type:
                         try:
@@ -136,11 +133,9 @@ class Trace:
                             print('\n\n\n!!! Warning !!!')
                             print(f'Check type for {self.__dict__["variableName"]}:{k}')
                             print('!!!\n\n\n')
-                            breakpoint()
                 except:
                     print(f'Error in key "{k}" could not parse {v}, see traceblock for possible errors:')
                     print(ini_string)
-                    breakpoint()
             # convert any matlab cells (read in python as sets) to comma delimited string
             self.__dict__[k] = safeString(self.__dict__[k])
         if fields_on_the_fly:
@@ -163,10 +158,14 @@ class parser:
     stage: str = None
     include: str = None
     verbose: bool = True
+    base_prop_by_stage: dict = field(default_factory=lambda:{
+        'firststage':['SiteID','Site_name','Difference_GMT_to_local_time','Timezone'],
+        'secondstage':['SiteID','Site_name','input_path','output_path','high_level_path','searchPath']
+    })
     fields_on_the_fly = False # If true, will allow non-standard fields which are not declared explicitly in Trace class
 
     def __post_init__(self):
-        self.config = configuration(SiteID=self.SiteID)
+        self.config = configuration()
         if self.SiteID is not None:
             fname = os.path.join(self.root,self.SiteID,f'{self.SiteID}_{self.stage}.ini')
         else:
@@ -179,13 +178,14 @@ class parser:
         else:
             sys.exit('Not a file: '+fname)
         self.clean_text()
-        self.parse_globals()
         self.parse_traces()
+        self.parse_globals()
         self.parse_includes()
+
         if not self.include:
             self.config.Include = list(self.config.Include.keys())
             
-            for prop in ['SiteID','Site_name','Difference_GMT_to_local_time','Timezone']:
+            for prop in self.base_prop_by_stage[self.stage]:
                 res = re.findall(prop+r'\s*=\s*(.*)\n',self.text)
                 if len(res):
                     self.config.__dict__[prop] = eval(res[0].strip())
@@ -224,8 +224,8 @@ class parser:
         self.text = self.text.replace('[',' [ ').replace(']',' ] ')
         # Except for start/end blocks
         self.text = self.text.replace(' [ End ] ','[End]').replace(' [ Trace ] ','[Trace]')
-        # replace all multi-spaces blocks with single white space
-        self.text = re.sub(r'[ \t]+',' ',self.text)
+        # # replace all multi-spaces blocks with single white space
+        # self.text = re.sub(r'[ \t]+',' ',self.text)
     
 
     def replace_num2str(self,text):
@@ -251,6 +251,7 @@ class parser:
                 else:
                     d = dateparse(inner)
             else:
+                inner = ','.join(str(int(i)) for i in inner.split(','))
                 d = eval('datetime('+inner+')')
             # format datestring, ~_~ is a stand in for a space to be replaced after list formatting
             d = d.strftime("%Y-%m-%dT%H:%M:%S")
@@ -305,14 +306,32 @@ class parser:
         self.trace_blocks = []
         for match in matches:
             trace = Trace()
-            trace.parse_from_ini_string(match,stage=self.stage,fields_on_the_fly=self.fields_on_the_fly)
+            trace.parse_from_ini_string(match,stage=self.stage,fields_on_the_fly=self.fields_on_the_fly,verbose=self.verbose)
             self.config.Trace[trace.variableName] = asdict_repr.asdict_repr(trace)
             self.text = self.text.replace(f'[Trace]{match}[End]','')
         self.text = self.text.strip()
 
     def parse_globals(self):
+        
+        base_vars = [l for l in self.text.split('\n') 
+                     if '=' in l and len(l.strip()) and
+                     not l.strip().startswith('%') and 'globalVars' not in l]
+        # print(self.text)
+        # print('\n\n')
+        for b in base_vars:
+            k,v = b.split('=',1)
+            k,v = k.strip(),v.strip()
+            # print(k,v)
+            exec(f'{k}={v}')
+            if k in self.base_prop_by_stage[self.stage]:
+                self.config.metadata[k] = safeString(eval(v))
+                print(self.config.metadata[k])
+            self.text = self.text.replace(b,'')
         # extract globalVars
-        globalVars = '\n'.join([l for l in self.text.split('\n') if l.startswith('globalVars')])
+        globalVars = [l for l in self.text.split('\n') if l.startswith('globalVars')]
+        for g in globalVars:
+            self.text = self.text.replace(g,'')
+        globalVars = '\n'.join(globalVars)
         if not len(globalVars):
             return
         for i in range(3,0,-1):
@@ -332,6 +351,7 @@ class parser:
             except:
                 if 'globalVars' not in value:
                     print(key,value)
+                    breakpoint()
                     sys.exit(f"Line {sys._getframe().f_lineno} failed to parse non-recurvsive global var")
                 elif value.startswith('['):
                     vlist = [v.strip() for v in value.strip('[]').split(',')]
