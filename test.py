@@ -5,7 +5,7 @@ importlib.reload(ini2yaml)
 
 # root = r'C:\Users\jskeeter\OneDrive - NRCan RNCan\Documents\DataTansfers'
 root = r'C:\Users\jskeeter\gsc-permafrost'
-root = 'C:\\'
+# root = 'C:\\'
 old_ini_path = os.path.join(root,r'Database\Calculation_Procedures\TraceAnalysis_ini')
 siteList = ['BB']#,'BB2','BBS','DSM','RBM','HOGG','OHM','YOUNG']
 for SiteID in siteList:
