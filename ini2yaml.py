@@ -275,9 +275,11 @@ class parser:
             return (f'[{inner}]')
         fmtd = re.sub(pattern,replace_spaces_and_semicolons,text)
         # Get rid of quoted lists if they exist
-        pattern = r"'\[(.*?)\]'"
         def replace_quotes(m):
             return(f'[{m.group(1)}]')
+        pattern = r"'\[(.*?)\]'"
+        fmtd = re.sub(pattern,replace_quotes,fmtd)
+        pattern = r"'\[(.*?)\];'"
         fmtd = re.sub(pattern,replace_quotes,fmtd)
         # convert {[..]} to [..]
         pattern = r"{\[(.*?)\]}"
