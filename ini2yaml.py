@@ -112,6 +112,8 @@ class Trace:
                             pass
                     return(m.group(0))
                 v = re.sub(pattern,add_datenum,v)
+                v = [u.split('%')[0].replace(' ','') for u in v.split('\n')]
+                v = ''.join(v)
                 self.__dict__[k] = v.strip().strip("'")
             else:
                 if k == 'units':
