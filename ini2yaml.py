@@ -2,39 +2,20 @@ import re
 import os
 import sys
 from ruamel.yaml import YAML
-from ruamel.yaml.comments import CommentedMap, CommentedSeq
-from ruamel.yaml.scalarstring import PlainScalarString, SingleQuotedScalarString, LiteralScalarString
+from ruamel.yaml.comments import CommentedSeq
+from ruamel.yaml.scalarstring import PlainScalarString, LiteralScalarString
 from ruamel.yaml.scalarint import ScalarInt
 from ruamel.yaml.scalarfloat import ScalarFloat
 from ruamel.yaml.scalarbool import ScalarBoolean
 from datetime import datetime,timedelta
 from dateutil.parser import parse as dateparse
-from dataclasses import dataclass,field, MISSING, _MISSING_TYPE
-from helperFunctions import asdict_repr,packDict
+from dataclasses import dataclass,field
+from helperFunctions import asdict_repr
 
 yaml = YAML()
 
-def safeString(obj,delim=','):
-    def check_reserved_words(s):
-        # Some words are parsed to bool in different yaml interpreters
-        # If code is expecting 'on' and gets a bool, will cause issues.
-        # Use sparingly, only for words needed.  By default, these words will be converted 
-        # y|Y|yes|Yes|YES|n|N|no|No|NO|
-        # true|True|TRUE|false|False|FALSE|
-        # on|On|ON|off|Off|OFF
-        if type(s) is str and s.lower() in ['on','off']:
-            s = SingleQuotedScalarString(s)
-        return(s)
-    if type(obj) is set:
-        return(','.join(list(check_reserved_words(obj))))
-    elif type(obj) is dict and not len(obj):
-        return(None)
-
-    else:
-        return(check_reserved_words(obj))
-
 @dataclass(kw_only=True)
-class configuration:
+class yml_base:
     metadata: dict = field(default_factory=dict)
     globalVars: dict = field(default_factory=dict)
     Trace: dict = field(default_factory=dict)
@@ -57,105 +38,125 @@ class iniFile:
 @dataclass(kw_only=True)
 class Trace:
     # The expected fields and their corresponding types for a trace object
-    variableName: str = field(default='', metadata={'stage': 'common'})
-    title: str = field(default='', metadata={'stage': 'common'})
-    originalVariable: str = field(default='', metadata={'stage': 'firststage'})
-    inputFileName: set = field(default_factory=str, metadata={'stage': 'firststage'})
-    inputFileName_dates: list = field(default_factory=list, metadata={'stage': 'firststage'})
-    measurementType: str = field(default='', metadata={'stage': 'firststage'})
-    units: str = field(default='', metadata={'stage': 'common'})
-    instrument: str = field(default='', metadata={'stage': 'firststage'})
-    instrumentType: str = field(default='', metadata={'stage': 'firststage'})
-    instrumentSN: str = field(default='', metadata={'stage': 'firststage'})
-    loggedCalibration: list = field(default_factory=list, metadata={'stage': 'firststage'})
-    currentCalibration: list = field(default_factory=list, metadata={'stage': 'firststage'})
-    minMax: list = field(default_factory=list, metadata={'stage': 'firststage'})
-    clamped_minMax: list = field(default_factory=list, metadata={'stage': 'firststage'})
-    zeroPt: list = field(default_factory=list, metadata={'stage': 'firststage'})
-    comments: str = field(default='', metadata={'stage': 'firststage'})
-    dependent: str = field(default='', metadata={'stage': 'firststage'})
-    Evaluate: str = field(default='', metadata={'stage': 'secondstage'})
+    # Required for all 
+    variableName: str = field(default='', metadata={'standard':True,'stage':'common','literal':False})
+    title: str = field(default='', metadata={'standard':True,'stage':'common','literal':False})
+    units: str = field(default='', metadata={'standard':True,'stage':'common','literal':False})
+    # Required for first stage
+    inputFileName: list = field(default_factory=list, metadata={'standard':True,'stage':'firststage','literal':False})
+    instrumentType: str = field(default='', metadata={'standard':True,'stage':'firststage','literal':False})
+    measurementType: str = field(default='', metadata={'standard':True,'stage':'firststage','literal':False})
+    minMax: list = field(default_factory=list, metadata={'standard':True,'stage':'firststage','literal':False})
+    # Required for second stage
+    Evaluate: str = field(default='', metadata={'standard':True,'stage':'secondstage','literal':True})
+    postEvaluate: str = field(default='', metadata={'standard':True,'stage':'secondstage optional','literal':True})
+    # Optional parameters
+    # ONLY required for optionals we want to have predefined settings
+    # Can take any non-defined field, but defining here will give defaults for standardization
+    Overwrite: int = field(default=0, metadata={'standard':True,'stage':'firststage','literal':False})
+    dependent: list = field(default_factory=list, metadata={'standard':True,'stage':'firststage optional','literal':False})
+    # Hidden (parameters to control behaviour which will not be written)
+    # by default, repr should be true, but when setting globals trace-by-trace, will set to false
+    repr: bool = field(default=True,repr=False,metadata={'standard':True,'stage':None,'literal':False})
+    stage: str = field(default='firststage',repr=False,metadata={'standard':True,'stage':None,'literal':False})
+    fields_on_the_fly: bool = field(default=False,repr=False,metadata={'standard':True,'stage':None,'literal':False})
+    verbose: bool = field(default=False,repr=False,metadata={'standard':True,'stage':None,'literal':False})
 
-    def parse_from_ini_string(self,ini_string,stage='firststage',fields_on_the_fly=False,verbose=False):
-        # A bit hack-key, remove appended fields from previous instance
+    def __post_init__(self):
+                # A bit hack-key, remove appended fields from previous instance
         # adding fields on the fly ensure the non-standard keys are transferred to the new yaml files
-        if fields_on_the_fly:
+        if self.fields_on_the_fly:
             flds = list(self.__dataclass_fields__.keys())
             for k in flds:
-                if k not in self.__dict__.keys():
+                if not self.__dataclass_fields__[k].metadata['standard']:
                     self.__dataclass_fields__.pop(k)
-        # reset repr in case it was turned off in previous instance
-        for k in self.__dataclass_fields__:
-            self.__dataclass_fields__[k].repr=True
+        # Set repr to true if current stage or common field
+        # Set to default to false otherwise
+        # If provided, will set repr = True
+        for k,v in self.__dataclass_fields__.items():
+            if v.metadata['stage'] in [self.stage,'common']:
+                self.__dataclass_fields__[k].repr=True
+            else:
+                self.__dataclass_fields__[k].repr=False
+    
+    def new_field(self,name,type,literal=False):
+        metadata = {'standard':False,'stage':self.stage,'literal':literal}
+        if type is str:
+            self.__dataclass_fields__[name] = field(default='',metadata=metadata,repr=True)
+            self.__dataclass_fields__[name].name = name
+            self.__dataclass_fields__[name].type = type
+            
+        elif type is list or type is set:
+            self.__dataclass_fields__[name] = field(default_factory=type,metadata=metadata,repr=True)
+            self.__dataclass_fields__[name].name = name
+            self.__dataclass_fields__[name].type = type
+        else:
+            self.__dataclass_fields__[name] = field(default=None,metadata=metadata,repr=True)
+            self.__dataclass_fields__[name].name = name
+            self.__dataclass_fields__[name].type = type
+
+        if self.verbose: print('Added: \n',self.__dataclass_fields__[name])
+
+    def add_item(self,key=None,text=None,anchors=None):
+        Inf = float('inf')
+        NaN = float('NaN')
+        nan = float('NaN')
+        if text.startswith("'") and (not text.startswith("'[") or 'Evaluate' in key):
+            if key not in self.__dataclass_fields__:
+                self.new_field(key,str)
+            if self.__dataclass_fields__[key].metadata['literal']:
+                text = CleanedText(text=text,forPython=False,literal=True).text
+                self.__dict__[key] = LiteralScalarString(text)
+            else:
+                text = CleanedText(text=text,forPython=False).text
+                self.__dict__[key] = PlainScalarString(text)
+        elif not text.startswith("'") or (text.startswith("'[") and not 'Evaluate' in key):
+            text = CleanedText(text=text,forPython=True).text
+            if 'globalVars' in text:
+                refs = re.findall(r'(globalVars(\.\w+)+)',text)
+                for j in range(len(refs)):
+                    text = text.replace(refs[j][0],f"anchors[1]['{refs[j][0]}']")
+                
+            text = eval(text)
+            if type(text) is set:
+                text = list(text)
+            if key not in self.__dataclass_fields__:
+                self.new_field(key,type(text))
+            if type(text) is list:
+                self.__dict__[key] = CommentedSeq(text)
+            elif type(text) is int:
+                self.__dict__[key] = ScalarInt(text)
+            elif type(text) is float:
+                self.__dict__[key] = ScalarFloat(text)
+            elif type(text) is bool:
+                self.__dict__[key] = ScalarBoolean(text)
+            elif 'ruamel.yaml' in str(type(text)):
+                self.__dict__[key] = text
+            else:
+                breakpoint()
+                sys.exit(f"Add {type(text)} for {key}")
+
+        if anchors is not None:
+            self.__dict__[key].yaml_set_anchor(anchors[0])
+
+        self.__dataclass_fields__[key].repr = True
+    
+    def from_trace_block(self,ini_string):
         # parse the trace from an ini file
         # Define python versions of matlab keywords
         lb_key = '~linebreak~'
-        Inf = float('inf')
-        NaN = float('NaN')
         new_string = ''
         pattern = r"'(.*?)'"
         def lb_replacer(match):
             return(match[0].replace('\n',lb_key))
         new_string = re.sub(pattern,lb_replacer,ini_string, flags=re.DOTALL)
-        key_val_pairs = {l.split('=',1)[0].strip():l.split('=',1)[-1].strip() 
+        key_val_pairs = {l.split('=',1)[0].strip():l.split('=',1)[-1].strip().replace(lb_key,'\n')
                         for l in new_string.split('\n') 
-                        if '=' in l and
-                        not l.strip().startswith('%') and
-                        not l.strip().startswith(';')}
-        for k,v in key_val_pairs.items():
-            v = v.replace(lb_key,'\n')
-            if k == 'Evaluate':
-                # don't evaluate these strings, re-add datenum calls for Evaluate compatibility
-                pattern = r'datetime\((.*?)\)'
-                def add_datenum(m):
-                    if ',' not in m.group(1):
-                        try:
-                            test = datetime(m.group(1))
-                            return(f"datenum({m.group(0)})")
-                        except:
-                            pass
-                    return(m.group(0))
-                v = re.sub(pattern,add_datenum,v)
-                v = v.split("'")[1]
-                v = '\n'.join([u.split('%')[0] for u in v.split('\n')])
-                v = re.sub("[ \t]",'',v)
-                self.__dict__[k] = LiteralScalarString(v.strip())
-            else:
-                v = CleanedText(text=v).text
-                if k == 'units':
-                    v = v.strip().encode('unicode_escape').decode()
-                try:
-                    v = v.replace('\n',' ')
-                    self.__dict__[k] = eval(v.strip()) 
-                    if k not in self.__dataclass_fields__ and not fields_on_the_fly and verbose:
-                        print(f"Field {k} is not a default field, run with fields_on_the_fly=True to allow for dynamic field generation, or edit the source code ...")
-                    elif not type(self.__dict__[k])==self.__dataclass_fields__[k].type:
-                        try:
-                            if self.__dataclass_fields__[k].type in [str,float,int] and len(self.__dict__[k]) == 0:
-                                self.__dict__[k] = self.__dataclass_fields__[k].default
-                            elif len(self.__dict__[k]) == 0:
-                                self.__dict__[k] = self.__dataclass_fields__[k].default_factory()
-                            else:
-                                a = 1/0
-                        except:
-                            print('\n\n\n!!! Warning !!!')
-                            print(f'Check type for {self.__dict__["variableName"]}:{k}')
-                            print('!!!\n\n\n')
-                except:
-                    print(f'Error in key "{k}" could not parse {v}, see traceblock for possible errors:')
-                    print(ini_string)
-            # convert any matlab cells (read in python as sets) to comma delimited string
-            self.__dict__[k] = safeString(self.__dict__[k])
-        if fields_on_the_fly:
-            for k in self.__dict__:
-                if k not in self.__dataclass_fields__:
-                    self.__dataclass_fields__[k] = field(metadata={'stage':'non-standard'})
-        for k,v in self.__dataclass_fields__.items():
-            if v.metadata['stage'] != stage and v.metadata['stage'] != 'common':
-                if self.__dict__[k] == v.default:
-                    self.__dataclass_fields__[k].repr=False
-                elif v.default_factory is not MISSING and self.__dict__[k] == v.default_factory():
-                    self.__dataclass_fields__[k].repr=False
+                        if '=' in l and not l.strip().startswith('%') and not l.strip().startswith(';')}
+        
+        # Autodetect type, if it starts with single quote its a string literal, except when list (followed by a bracket) not starting evaluate
+        for key,text in key_val_pairs.items():
+            self.add_item(key=key,text=text)
 
 @dataclass(kw_only=True)
 class parser:
@@ -168,45 +169,62 @@ class parser:
         'firststage':['SiteID','Site_name','Difference_GMT_to_local_time','Timezone'],
         'secondstage':['SiteID','Site_name','input_path','output_path','high_level_path','searchPath']
     })
-    fields_on_the_fly = False # If true, will allow non-standard fields which are not declared explicitly in Trace class
+    fields_on_the_fly: bool = False # If true, will allow non-standard fields which are not declared explicitly in Trace class
 
     def __post_init__(self):
-        self.config = configuration()
+        self.config = yml_base()
         if self.SiteID is not None:
             fname = os.path.join(self.root,self.SiteID,f'{self.SiteID}_{self.stage}.ini')
         else:
             fname = os.path.join(self.root,self.include)
         if os.path.isfile(fname):
             with open(fname,encoding='utf-8') as f:
-                if self.verbose:
-                    print('reading ',fname)
+                print('reading ',fname)
                 self.ini_string = f.read()
         else:
             sys.exit('Not a file: '+fname)
-            
+        
         self.parse_traces()
+        self.parse_metadata()
         self.parse_globals()
         self.parse_includes()
-
 
         if not self.include:
             self.config.Include = list(self.config.Include.keys())
             
-            # for prop in self.base_prop_by_stage[self.stage]:
-            #     res = re.findall(prop+r'\s*=\s*(.*)\n',self.text)
-            #     if len(res):
-            #         self.config.__dict__[prop] = eval(res[0].strip())
-            #         self.text = re.sub(prop+r'\s*=\s*(.*)\n','',self.text)
         outpath = os.path.join(self.root,fname.replace('.ini','.yml'))
         self.write(outpath)
-        # else:
-        #     # Delete empty fields from includes
-        #     for c in self.config.__dataclass_fields__.keys():
-        #         if (self.config.__dict__[c] == self.config.__dataclass_fields__[c].default or 
-        #             self.config.__dict__[c] == self.config.__dataclass_fields__[c].default_factory()):
-        #             del self.config.__dict__[c]
-        #     outpath = os.path.join(self.root,fname.replace('.ini','.yml'))
-        #     self.write(outpath)
+      
+    def parse_traces(self):
+        # Find trace blocks
+        pattern = r"\[Trace\](.*?)\[End\]"
+        matches = re.findall(pattern, self.ini_string, flags=re.DOTALL)
+        self.trace_blocks = []
+        for match in matches:
+            if self.include is None: overwrite = 0
+            else: overwrite = 1   
+            trace = Trace(Overwrite=overwrite,stage=self.stage,fields_on_the_fly=self.fields_on_the_fly,verbose=self.verbose)             
+            trace.from_trace_block(match)
+            if trace.variableName != '':
+                # Custom function to dump dataclass to dict conditional upon each field.repr parameter
+                self.config.Trace[trace.variableName] = asdict_repr.asdict_repr(trace)
+            self.ini_string = self.ini_string.replace(f'[Trace]{match}[End]','')
+        self.ini_string = self.ini_string.strip()
+    
+    def parse_metadata(self):
+        mdLines = [l for l in self.ini_string.split('\n') 
+                    if '=' in l and len(l.strip()) and
+                    not l.strip().startswith('%') and
+                    not l.strip().startswith(';') and
+                    'globalVars' not in l]
+        metadata = {}
+        for l in mdLines:
+            metadata[l.split('=',1)[0].strip()] = l.split('=',1)[-1].strip() 
+            self.ini_string = self.ini_string.replace(l,'')
+        temp = Trace(stage=None,fields_on_the_fly=True)
+        for key,text in metadata.items():
+            temp.add_item(key=key,text=text)
+            self.config.metadata[key] = temp.__dict__[key]
 
     def parse_includes(self):
         # Call self recursively to parse each include file
@@ -217,138 +235,59 @@ class parser:
                 self.config.Include[fname.split('.')[0]] = parser(root=self.root,include=fname,stage=self.stage,verbose=self.verbose).config.Trace
                 # Remove lines which have been processed
                 self.ini_string = self.ini_string.replace(include,' ')
-                
-    def parse_traces(self):
-        # Find trace blocks
-        pattern = r"\[Trace\](.*?)\[End\]"
-        matches = re.findall(pattern, self.ini_string, flags=re.DOTALL)
-        self.trace_blocks = []
-        for match in matches:
-            trace = Trace()
-            trace.parse_from_ini_string(match,stage=self.stage,fields_on_the_fly=self.fields_on_the_fly,verbose=self.verbose)
-            if trace.variableName != '':
-                self.config.Trace[trace.variableName] = asdict_repr.asdict_repr(trace)
-            self.ini_string = self.ini_string.replace(f'[Trace]{match}[End]','')
-        self.ini_string = self.ini_string.strip()
 
-        
     def parse_globals(self):
-        
-        base_vars = [l for l in self.ini_string.split('\n') 
-                    if '=' in l and len(l.strip()) and
-                    not l.strip().startswith('%') and
-                    not l.strip().startswith(';') and
-                    'globalVars' not in l]
-        for b in base_vars:
-            k,v = b.split('=',1)
-            k,v = k.strip(),CleanedText(text=v).text
-            exec(f'{k}={v}')
-            if k in self.base_prop_by_stage[self.stage]:
-                self.config.metadata[k] = safeString(eval(v))
-                print(self.config.metadata[k])
-            self.ini_string = self.ini_string.replace(b,'')
         # extract globalVars
-        globalVars = [l for l in self.ini_string.split('\n') if l.startswith('globalVars')]
-        for g in globalVars:
-            self.ini_string = self.ini_string.replace(g,'')
-        globalVars = '\n'.join(globalVars)
-        if not len(globalVars):
-            return
-        for i in range(3,0,-1):
-            # Append ~! to end of each pattern to prevent partial matches
-            pat = r"globalVars\.(\w+)".replace(r'\.(\w+)',r'\.(\w+)'*i)
-            sub = r"globalVariables."+r'.'.join([fr"\{i+1}" for i in range(i)])+r'~!'
-            globalVars = re.sub(pat,sub,globalVars)
-        globalVars = globalVars.replace('globalVariables','globalVars').replace('~!','')
-        # Convert to dict
-        globalVars = [l.split('=',1) for l in globalVars.split('\n')]
-        globalVars = {l[0].strip():l[-1].strip() for l in globalVars if l[0].strip() != ''}
-        # Try to evaluate what can be evaluated
-        # Identify recursive values to be set as anchors eval it fails
-        for key,value in globalVars.items():
-            if key != 'Evaluate':
-                value = CleanedText(text=value).text
-            try:
-                globalVars[key] = safeString(eval(value))
-            except:
-                print(value)
-                print(value.strip())
-                if 'globalVars' not in value:
-                    print(key,value)
-                    breakpoint()
-                    sys.exit(f"Line {sys._getframe().f_lineno} failed to parse non-recurvsive global var")
-                elif value.startswith('['):
-                    vlist = [v.strip() for v in value.strip('[]').split(',')]
-                    globalVars[key] = []
-                else:
-                    globalVars[key] = None
-                    vlist = [value]
-                for i,v in enumerate(vlist):
-                    if v in globalVars.keys():
-                        # define ruamel.yaml anchors for assorted variable types
-                        # for recursive referencing
-                        if type(globalVars[v]) is list:
-                            globalVars[v] = CommentedSeq(globalVars[v])
-                            globalVars[v].yaml_set_anchor(v.replace('.','_'),always_dump=True)
-                        elif type(globalVars[v]) is dict:
-                            globalVars[v] = CommentedMap(globalVars[v])
-                            globalVars[v].yaml_set_anchor(v.replace('.','_'),always_dump=True)
-                        elif type(globalVars[v]) is str:
-                            globalVars[v] = PlainScalarString(globalVars[v])
-                            globalVars[v].yaml_set_anchor(v.replace('.','_'),always_dump=True)
-                        elif type(globalVars[v]) is int:
-                            globalVars[v] = ScalarInt(globalVars[v])
-                            globalVars[v].yaml_set_anchor(v.replace('.','_'),always_dump=True)
-                        elif type(globalVars[v]) is float:
-                            globalVars[v] = ScalarFloat(globalVars[v])
-                            globalVars[v].yaml_set_anchor(v.replace('.','_'),always_dump=True)
-                        elif type(globalVars[v]) is bool:
-                            globalVars[v] = ScalarBoolean(globalVars[v])
-                            globalVars[v].yaml_set_anchor(v.replace('.','_'),always_dump=True)
-                            
-                    # Assign anchors to recursive references
-                    if type(globalVars[key]) is list:
-                        if v in globalVars.keys():
-                            globalVars[key].append(globalVars[v])
-                        else:
-                            globalVars[key].append(eval(v))
-                    else:
-                        globalVars[key] = globalVars[v]
-        # custom function for converting delimited strings to nested dict
-        globalVars = packDict.packDict(globalVars,format='.')
-        def sub_anchors(dct={},anc={}):
-            # Preserve ruamel anchors
-            if type(dct) is dict:
-                for key,value in dct.items():
-                    if type(value) is dict:
-                        dct[key],anc = sub_anchors(value,anc)
-                    elif hasattr(value,'anchor'):
-                        if str(value.anchor) not in anc.keys():
-                            anc[str(value.anchor)] = value
-                            dct[key] = value
-                        else:
-                            dct[key] = anc[str(value.anchor)]
-                    elif type(value) is list:
-                        dct[key],anc = sub_anchors(value,anc)
-            elif type(dct) is list:
-                for i,value in enumerate(dct):
-                    if type(value) is list:
-                        dct[i],anc = sub_anchors(value,anc)
-                    elif hasattr(value,'anchor'):
-                        if str(value.anchor) not in anc.keys():
-                            anc[str(value.anchor)] = value
-                            dct[i] = value
-                        else:
-                            dct[i] = anc[str(value.anchor)]
-            return(dct,anc)
-        globalVars,_ = sub_anchors(globalVars)
-        self.config.globalVars = globalVars['globalVars']
+        globalTemp = [l for l in self.ini_string.split('\n') if l.startswith('globalVars')]
+        # For tracking Trace objects
+        globalVars = {}
+        # For writing to self.config
+        globalDump = {}
+        anchors = {}
+        name = None
+        for gVar in globalTemp:
+            self.ini_string = self.ini_string.replace(gVar,'')
+            gVar = [g.strip() for g in gVar.split('=',1)]
+            key = gVar[0].split('.')
+            text = gVar[-1]
+            if len(key) == 4:
+                if key[1] not in globalVars:
+                    globalVars[key[1]] = {}
+                    globalDump[key[1]] = {}
+                if key[2] not in globalVars[key[1]]:
+                    globalVars[key[1]][key[2]] = Trace(variableName=key[2],Overwrite=1,stage=None,fields_on_the_fly=True,repr=False)
+                    globalDump[key[1]][key[2]] = {}
+                globalVars[key[1]][key[2]].add_item(
+                    key=key[3],text=text,
+                    anchors=[gVar[0].replace('.','__'),anchors])
+                anchors[gVar[0]] = globalVars[key[1]][key[2]].__dict__[key[3]]
+                globalDump[key[1]][key[2]][key[3]] = globalVars[key[1]][key[2]].__dict__[key[3]]
+            elif len(key) == 3:
+                if key[1] not in globalVars:
+                    globalVars[key[1]] = Trace(variableName=key[1],Overwrite=1,stage=None,fields_on_the_fly=True,repr=False)
+                    globalDump[key[1]] = {}
+                globalVars[key[1]].add_item(
+                    key=key[2],text=text,
+                    anchors=[gVar[0].replace('.','__'),anchors])
+                anchors[gVar[0]] = globalVars[key[1]].__dict__[key[2]]
+                globalDump[key[1]][key[2]] = globalVars[key[1]].__dict__[key[2]]
+            elif len(key) == 2:
+                if key[1] not in globalVars:
+                    globalVars[key[1]] = Trace(variableName=key[1],Overwrite=1,stage=None,fields_on_the_fly=True,repr=False)
+                    globalVars[key[1]].add_item(
+                        key=key[1],text=text,
+                        anchors=[gVar[0].replace('.','__'),anchors])
+                    anchors[gVar[0]] = globalVars[key[1]].__dict__[key[1]]
+                    globalDump[key[1]] = globalVars[key[1]].__dict__[key[1]]
+        self.config.globalVars = globalDump
 
-        
     def write(self,outpath):
         print('Writing ',outpath)
         with open(outpath,'w+',encoding="utf-8") as f:
-            yaml.dump(self.config.__dict__,f)
+            try:
+                yaml.dump(self.config.__dict__,f)
+            except:
+                breakpoint()
         self.cleanKeys(outpath)
     
     def cleanKeys(self,outpath):
@@ -365,12 +304,28 @@ class parser:
 @dataclass(kw_only=True)
 class CleanedText:
     text: str
+    forPython: bool
+    literal: bool = False
     bp: bool = False
     
     def __post_init__(self):
-        self.clean_text()
+        # if not self.literal:
+        #     self.text = ','.join(t.strip(', ') for t in self.text.split('\n'))
+        if not self.forPython:
+            self.clean_for_string_formatting()
+        else:
+            self.clean_for_python_parsing()
+    
+    def clean_for_string_formatting(self):
+        self.text = self.text.strip()
+        if self.text != "''":
+            self.text = self.text.replace("''",'"')
+        self.text = self.text.replace("'",'')
+        self.text = self.text.replace('\t','')
+            
 
-    def clean_text(self):
+
+    def clean_for_python_parsing(self):
         if self.bp: breakpoint()
         # Exclude comments, but preserve percent signs within strings
         pattern = r"(\"[^\"]*\"|'[^']*')|%(.*)"
@@ -381,7 +336,11 @@ class CleanedText:
                 return ''
         self.text = re.sub(pattern, replacer, self.text)
         # Delete blank lines
+        if '\n' in self.text:
+            breakpoint()
         self.text = '\n'.join([l.strip() for l in self.text.split('\n') if len(l.strip()) and not l.strip().startswith(';')])
+        # Convert set notation to list notation
+        self.text = self.text.replace('{','[').replace('}',']')
         # Replace functions names which are directly translatable to python
         self.text = self.replace_num2str(text=self.text)
         # Convert to standard pythonic dates
@@ -394,8 +353,8 @@ class CleanedText:
         self.text = self.text.replace('[',' [ ').replace(']',' ] ')
         # Except for start/end blocks
         self.text = self.text.replace(' [ End ] ','[End]').replace(' [ Trace ] ','[Trace]')
-        self.text = self.text.strip()
-    
+        # Strip extra spaces
+        self.text = self.text.strip()    
 
     def replace_num2str(self,text):
         # Exclude comments, but preserve percent signs within strings
@@ -404,7 +363,6 @@ class CleanedText:
             inner = match.group(1) 
             return (f" {inner} ")
         return(re.sub(pattern, replacer, text))
-
 
     def replace_datenum(self,text):
         # Replace all depreciated datenum objects with datetime object which is valid in both python and matlab
