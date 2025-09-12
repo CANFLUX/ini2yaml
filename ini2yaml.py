@@ -105,7 +105,7 @@ class Trace:
             if key not in self.__dataclass_fields__:
                 self.new_field(key,str)
             if self.__dataclass_fields__[key].metadata['literal']:
-                text = CleanedText(text=text,forPython=False,literal=True).text
+                text = CleanedText(text=text,forPython=False,PreserveComments=True).text
                 self.__dict__[key] = LiteralScalarString(text)
             else:
                 text = CleanedText(text=text,forPython=False).text
@@ -305,24 +305,32 @@ class parser:
 class CleanedText:
     text: str
     forPython: bool
-    literal: bool = False
+    PreserveComments: bool = False
     bp: bool = False
     
     def __post_init__(self):
-        # if not self.literal:
-        #     self.text = ','.join(t.strip(', ') for t in self.text.split('\n'))
         if not self.forPython:
             self.clean_for_string_formatting()
         else:
             self.clean_for_python_parsing()
     
     def clean_for_string_formatting(self):
+        if not self.PreserveComments:
+            # Exclude comments, but preserve percent signs within strings
+            pattern = r"(\"[^\"]*\"|'[^']*')|%(.*)"
+            def replacer(match):
+                if match.group(1):  # quoted string
+                    return match.group(1)
+                else:               # bare %
+                    return ''
+            if self.text != '%':
+                self.text = re.sub(pattern, replacer, self.text)
+        
         self.text = self.text.strip()
         if self.text != "''":
             self.text = self.text.replace("''",'"')
         self.text = self.text.replace("'",'')
         self.text = self.text.replace('\t','')
-            
 
 
     def clean_for_python_parsing(self):
