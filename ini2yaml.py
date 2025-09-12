@@ -119,6 +119,7 @@ class Trace:
                 
             text = eval(text)
             if type(text) is set:
+                keyboard
                 text = list(text)
             if key not in self.__dataclass_fields__:
                 self.new_field(key,type(text))
