@@ -60,56 +60,49 @@ class Trace:
     #       * optional only written if provided
 
     # Required for all 
-    variableName: str = field(default='', metadata={'standard':True,'stage':'common','literal':False})
-    title: str = field(default='', metadata={'standard':True,'stage':'common','literal':None})
-    units: str = field(default='', metadata={'standard':True,'stage':'common','literal':None})
+    variableName: str = field(default='', metadata={'standard':True,'optional':False,'stage':'common','literal':False})
+    title: str = field(default='', metadata={'standard':True,'optional':False,'stage':'common','literal':None})
+    units: str = field(default='', metadata={'standard':True,'optional':False,'stage':'common','literal':None})
     # Required for first stage
-    inputFileName: list = field(default_factory=list, metadata={'standard':True,'stage':'firststage','literal':None})
-    instrumentType: str = field(default='', metadata={'standard':True,'stage':'firststage','literal':False})
-    measurementType: str = field(default='', metadata={'standard':True,'stage':'firststage','literal':False})
-    minMax: list = field(default_factory=list, metadata={'standard':True,'stage':'firststage','literal':False})
+    inputFileName: str = field(default='', metadata={'standard':True,'optional':False,'stage':'firststage','literal':False}) # Note, can be a list instead if needed?  matlab codebase has variable as cell array but not sure why?
+    instrumentType: str = field(default='', metadata={'standard':True,'optional':False,'stage':'firststage','literal':False})
+    measurementType: str = field(default='', metadata={'standard':True,'optional':False,'stage':'firststage','literal':False})
+    minMax: list = field(default_factory=list, metadata={'standard':True,'optional':False,'stage':'firststage','literal':False})
     # Required for second stage
-    Evaluate: str = field(default='', metadata={'standard':True,'stage':'secondstage','literal':True})
-    postEvaluate: str = field(default='', metadata={'standard':True,'stage':'secondstage optional','literal':True})
+    Evaluate: str = field(default='', metadata={'standard':True,'optional':False,'stage':'secondstage','literal':True})
     # Optional parameters
     # ONLY required for optionals we want to have predefined settings
     # Can take any non-defined field, but defining here will give defaults for standardization
-    Overwrite: int = field(default=0, metadata={'standard':True,'stage':'firststage','literal':False})
-    dependent: list = field(default_factory=list, metadata={'standard':True,'stage':'firststage optional','literal':False})
-    originalVariable: list = field(default_factory=list, metadata={'standard':True,'stage':'firststage optional','literal':True})
-    comment: list = field(default_factory=list, metadata={'standard':True,'stage':'firststage optional','literal':True})
-    ECCC_station: str = field(default='', metadata={'standard':True,'stage':'firststage optional','literal':False})
-    inputFileName_dates: list = field(default_factory=list, metadata={'standard':True,'stage':'firststage optional','literal':False})
+    Overwrite: int = field(default=0, metadata={'standard':True,'optional':False,'stage':'firststage','literal':False})
+    dependent: list = field(default_factory=list, metadata={'standard':True,'optional':True,'stage':'firststage','literal':False})
+    originalVariable: list = field(default_factory=list, metadata={'standard':True,'optional':True,'stage':'firststage','literal':True})
+    postEvaluate: str = field(default='', metadata={'standard':True,'optional':True,'stage':'secondstage','literal':True})
+    comment: list = field(default_factory=list, metadata={'standard':True,'optional':True,'stage':'firststage','literal':True})
+    ECCC_station: str = field(default='', metadata={'standard':True,'optional':True,'stage':'firststage','literal':False})
+    inputFileName_dates: list = field(default_factory=list, metadata={'standard':True,'optional':True,'stage':'firststage','literal':False})
     
     # Hidden (parameters to control behaviour which will not be written)
     # by default, repr should be true, but when setting globals trace-by-trace, will set to false
-    repr: bool = field(default=True,repr=False,metadata={'standard':True,'stage':None,'literal':False})
-    stage: str = field(default='firststage',repr=False,metadata={'standard':True,'stage':None,'literal':False})
-    fields_on_the_fly: bool = field(default=False,repr=False,metadata={'standard':True,'stage':None,'literal':False})
-    verbose: bool = field(default=False,repr=False,metadata={'standard':True,'stage':None,'literal':False})
+    repr: bool = field(default=True,repr=False,metadata={'standard':True,'optional':False,'stage':None,'literal':False})
+    stage: str = field(default='firststage',repr=False,metadata={'standard':True,'optional':False,'stage':None,'literal':False})
+    fields_on_the_fly: bool = field(default=False,repr=False,metadata={'standard':True,'optional':False,'stage':None,'literal':False})
+    verbose: bool = field(default=False,repr=False,metadata={'standard':True,'optional':False,'stage':None,'literal':False})
     # If file being parsed is an include,
     # Use variable substitution for globalVariables instead of anchors (limited to within one-file)
-    include: bool = field(default=False,repr=False,metadata={'standard':True,'stage':None,'literal':False})
+    include: bool = field(default=False,repr=False,metadata={'standard':True,'optional':False,'stage':None,'literal':False})
 
     def __post_init__(self):
-                # A bit hack-key, remove appended fields from previous instance
-        # adding fields on the fly ensure the non-standard keys are transferred to the new yaml files
-        if self.fields_on_the_fly:
-            flds = list(self.__dataclass_fields__.keys())
-            for k in flds:
-                if not self.__dataclass_fields__[k].metadata['standard']:
-                    self.__dataclass_fields__.pop(k)
         # Set repr to true if current stage or common field
         # Set to default to false otherwise
         # If provided, will set repr = True
         for k,v in self.__dataclass_fields__.items():
-            if v.metadata['stage'] in [self.stage,'common']:
+            if v.metadata['stage'] in [self.stage,'common'] and not v.metadata['optional']:
                 self.__dataclass_fields__[k].repr=True
             else:
                 self.__dataclass_fields__[k].repr=False
     
     def new_field(self,name,vtype,literal=None):
-        metadata = {'standard':False,'stage':self.stage,'literal':literal}
+        metadata = {'standard':False,'stage':self.stage,'literal':literal,'optional':True}
         if 'ruamel' in str(vtype):
             vtype = ruamel_type_map(vtype)
         if vtype is str:
@@ -131,7 +124,10 @@ class Trace:
         Inf = float('inf')
         NaN = float('NaN')
         nan = float('NaN')
-        if text.startswith("'") and (not text.startswith("'[") or 'Evaluate' in key):
+        # if text.startswith("'") and (not text.startswith("'[") or 'Evaluate' in key):
+        # Format strings, except in edge cases (e.g., inputFIleName, where they are provided as a list)
+        if (((key in self.__dataclass_fields__ and self.__dataclass_fields__[key].type is str) or text.startswith("'")) and
+            (not text.startswith("'[") and not text.startswith("{")) or 'Evaluate' in key):
             if key not in self.__dataclass_fields__:
                 self.new_field(key,str)
             if self.__dataclass_fields__[key].metadata['literal']:
@@ -140,7 +136,7 @@ class Trace:
             else:
                 text = CleanedText(text=text,forPython=False,Literal=self.__dataclass_fields__[key].metadata['literal']).text
                 self.__dict__[key] = PlainScalarString(text)
-        elif not text.startswith("'") or (text.startswith("'[") and not 'Evaluate' in key):
+        else:#if not text.startswith("'") or (text.startswith("'[") and not 'Evaluate' in key):
             text = CleanedText(text=text,forPython=True).text
             if 'globalVars' in text:
                 refs = re.findall(r'(globalVars(\.\w+)+)',text)
@@ -158,6 +154,7 @@ class Trace:
                 if not len(md):
                     print('Error processing ',key,' = ',text)
                     print('Check global variable definitions')
+                    sys.exit()
                 else:
                     print('Warning, attempting fix for improperly defined global variable\n\nreplacing ',text,' with ',md[0])
                     print('\n\nType c to continue or exit() to quit')
@@ -166,6 +163,9 @@ class Trace:
                     breakpoint()
             if key not in self.__dataclass_fields__:
                 self.new_field(key,type(text))
+            
+            if type(text) is list and self.__dataclass_fields__[key].type is str:
+                text = ''.join(text)
             if 'ruamel.yaml' in str(type(text)):
                 self.__dict__[key] = text
             elif self.__dataclass_fields__[key].type is list:
@@ -187,23 +187,6 @@ class Trace:
 
         self.__dataclass_fields__[key].repr = True
     
-    def from_trace_block(self,ini_string):
-        # parse the trace from an ini file
-        # Define python versions of matlab keywords
-        lb_key = '~linebreak~'
-        new_string = ''
-        pattern = r"'(.*?)'"
-        def lb_replacer(match):
-            return(match[0].replace('\n',lb_key))
-        new_string = re.sub(pattern,lb_replacer,ini_string, flags=re.DOTALL)
-        key_val_pairs = {l.split('=',1)[0].strip():l.split('=',1)[-1].strip().replace(lb_key,'\n')
-                        for l in new_string.split('\n') 
-                        if '=' in l and not l.strip().startswith('%') and not l.strip().startswith(';')}
-        
-        # Autodetect type, if it starts with single quote its a string literal, except when list (followed by a bracket) not starting evaluate
-        for key,text in key_val_pairs.items():
-            self.add_item(key=key,text=text)
-
 @dataclass(kw_only=True)
 class parser:
     root: str
@@ -250,12 +233,31 @@ class parser:
             if self.include is None: overwrite = 0
             else: overwrite = 1   
             trace = Trace(Overwrite=overwrite,stage=self.stage,fields_on_the_fly=self.fields_on_the_fly,verbose=self.verbose,include=bool(overwrite))             
-            trace.from_trace_block(match)
+            trace = self.from_trace_block(match,trace=trace)
+            
             if trace.variableName != '':
                 # Custom function to dump dataclass to dict conditional upon each field.repr parameter
                 self.config.Trace[trace.variableName] = asdict_repr.asdict_repr(trace)
             self.ini_string = self.ini_string.replace(f'[Trace]{match}[End]','')
         self.ini_string = self.ini_string.strip()
+
+    def from_trace_block(self,ini_string,trace):
+        # parse the trace from an ini file
+        # Define python versions of matlab keywords
+        lb_key = '~linebreak~'
+        new_string = ''
+        pattern = r"'(.*?)'"
+        def lb_replacer(match):
+            return(match[0].replace('\n',lb_key))
+        new_string = re.sub(pattern,lb_replacer,ini_string, flags=re.DOTALL)
+        key_val_pairs = {l.split('=',1)[0].strip():l.split('=',1)[-1].strip().replace(lb_key,'\n')
+                        for l in new_string.split('\n') 
+                        if '=' in l and not l.strip().startswith('%') and not l.strip().startswith(';')}
+        
+        # Autodetect type, if it starts with single quote its a string literal, except when list (followed by a bracket) not starting evaluate
+        for key,text in key_val_pairs.items():
+            trace.add_item(key=key,text=text)
+        return(trace)
     
     def parse_metadata(self):
         self.configAnchors = {}
