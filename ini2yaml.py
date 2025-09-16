@@ -14,9 +14,22 @@ from helperFunctions import asdict_repr
 
 yaml = YAML()
 
+def ruamel_type_map(vtype):
+    if vtype is type(PlainScalarString('')) or vtype is type(type(LiteralScalarString(''))):
+        return(str)
+    elif vtype is type(ScalarInt(0)):
+        return(int)
+    elif vtype is type(ScalarFloat(0.0)):
+        return(float)
+    elif vtype is type(ScalarBoolean(True)):
+        return(bool)
+    elif vtype is type(CommentedSeq([])):
+        return(list)
+    
+
 @dataclass(kw_only=True)
 class yml_base:
-    metadata: dict = field(default_factory=dict)
+    Metadata: dict = field(default_factory=dict)
     globalVars: dict = field(default_factory=dict)
     Trace: dict = field(default_factory=dict)
     Include: dict = field(default_factory=dict)
@@ -38,12 +51,20 @@ class iniFile:
 @dataclass(kw_only=True)
 class Trace:
     # The expected fields and their corresponding types for a trace object
+    # metadata field instructs behavior
+    # Standard T/F (True for all parameter defined by default, False for non-standard parameters parsed from ini)
+    # Stage controls which parameters are written:
+    #   * common > always written
+    #   * firststage > always written (for first stage)
+    #   * secondstage > always written (for second stage)
+    #       * optional only written if provided
+
     # Required for all 
     variableName: str = field(default='', metadata={'standard':True,'stage':'common','literal':False})
-    title: str = field(default='', metadata={'standard':True,'stage':'common','literal':False})
-    units: str = field(default='', metadata={'standard':True,'stage':'common','literal':False})
+    title: str = field(default='', metadata={'standard':True,'stage':'common','literal':None})
+    units: str = field(default='', metadata={'standard':True,'stage':'common','literal':None})
     # Required for first stage
-    inputFileName: list = field(default_factory=list, metadata={'standard':True,'stage':'firststage','literal':False})
+    inputFileName: list = field(default_factory=list, metadata={'standard':True,'stage':'firststage','literal':None})
     instrumentType: str = field(default='', metadata={'standard':True,'stage':'firststage','literal':False})
     measurementType: str = field(default='', metadata={'standard':True,'stage':'firststage','literal':False})
     minMax: list = field(default_factory=list, metadata={'standard':True,'stage':'firststage','literal':False})
@@ -55,12 +76,20 @@ class Trace:
     # Can take any non-defined field, but defining here will give defaults for standardization
     Overwrite: int = field(default=0, metadata={'standard':True,'stage':'firststage','literal':False})
     dependent: list = field(default_factory=list, metadata={'standard':True,'stage':'firststage optional','literal':False})
+    originalVariable: list = field(default_factory=list, metadata={'standard':True,'stage':'firststage optional','literal':True})
+    comment: list = field(default_factory=list, metadata={'standard':True,'stage':'firststage optional','literal':True})
+    ECCC_station: str = field(default='', metadata={'standard':True,'stage':'firststage optional','literal':False})
+    inputFileName_dates: list = field(default_factory=list, metadata={'standard':True,'stage':'firststage optional','literal':False})
+    
     # Hidden (parameters to control behaviour which will not be written)
     # by default, repr should be true, but when setting globals trace-by-trace, will set to false
     repr: bool = field(default=True,repr=False,metadata={'standard':True,'stage':None,'literal':False})
     stage: str = field(default='firststage',repr=False,metadata={'standard':True,'stage':None,'literal':False})
     fields_on_the_fly: bool = field(default=False,repr=False,metadata={'standard':True,'stage':None,'literal':False})
     verbose: bool = field(default=False,repr=False,metadata={'standard':True,'stage':None,'literal':False})
+    # If file being parsed is an include,
+    # Use variable substitution for globalVariables instead of anchors (limited to within one-file)
+    include: bool = field(default=False,repr=False,metadata={'standard':True,'stage':None,'literal':False})
 
     def __post_init__(self):
                 # A bit hack-key, remove appended fields from previous instance
@@ -79,21 +108,22 @@ class Trace:
             else:
                 self.__dataclass_fields__[k].repr=False
     
-    def new_field(self,name,type,literal=False):
+    def new_field(self,name,vtype,literal=None):
         metadata = {'standard':False,'stage':self.stage,'literal':literal}
-        if type is str:
+        if 'ruamel' in str(vtype):
+            vtype = ruamel_type_map(vtype)
+        if vtype is str:
             self.__dataclass_fields__[name] = field(default='',metadata=metadata,repr=True)
             self.__dataclass_fields__[name].name = name
-            self.__dataclass_fields__[name].type = type
-            
-        elif type is list or type is set:
-            self.__dataclass_fields__[name] = field(default_factory=type,metadata=metadata,repr=True)
+            self.__dataclass_fields__[name].type = vtype
+        elif vtype is list or vtype is set:
+            self.__dataclass_fields__[name] = field(default_factory=vtype,metadata=metadata,repr=True)
             self.__dataclass_fields__[name].name = name
-            self.__dataclass_fields__[name].type = type
+            self.__dataclass_fields__[name].type = vtype
         else:
             self.__dataclass_fields__[name] = field(default=None,metadata=metadata,repr=True)
             self.__dataclass_fields__[name].name = name
-            self.__dataclass_fields__[name].type = type
+            self.__dataclass_fields__[name].type = vtype
 
         if self.verbose: print('Added: \n',self.__dataclass_fields__[name])
 
@@ -105,34 +135,49 @@ class Trace:
             if key not in self.__dataclass_fields__:
                 self.new_field(key,str)
             if self.__dataclass_fields__[key].metadata['literal']:
-                text = CleanedText(text=text,forPython=False,PreserveComments=True).text
+                text = CleanedText(text=text,forPython=False,Literal=True).text
                 self.__dict__[key] = LiteralScalarString(text)
             else:
-                text = CleanedText(text=text,forPython=False).text
+                text = CleanedText(text=text,forPython=False,Literal=self.__dataclass_fields__[key].metadata['literal']).text
                 self.__dict__[key] = PlainScalarString(text)
         elif not text.startswith("'") or (text.startswith("'[") and not 'Evaluate' in key):
             text = CleanedText(text=text,forPython=True).text
             if 'globalVars' in text:
                 refs = re.findall(r'(globalVars(\.\w+)+)',text)
                 for j in range(len(refs)):
-                    text = text.replace(refs[j][0],f"anchors[1]['{refs[j][0]}']")
-                
-            text = eval(text)
-            if type(text) is set:
-                keyboard
-                text = list(text)
+                    if not self.include:
+                        text = text.replace(refs[j][0],f"anchors[1]['{refs[j][0]}']")
+                    else:
+                        text = text.replace(refs[j][0],f"'${refs[j][0]}$'")
+            try:
+                text = eval(text)            
+            except:
+                # A stupid incomplete hack to solve edge cases resulting from poor practice in globals
+                #
+                md = [k for k in anchors[1].keys() if k.startswith('Metadata') and text in k]
+                if not len(md):
+                    print('Error processing ',key,' = ',text)
+                    print('Check global variable definitions')
+                else:
+                    print('Warning, attempting fix for improperly defined global variable\n\nreplacing ',text,' with ',md[0])
+                    print('\n\nType c to continue or exit() to quit')
+                    text = anchors[1][md[0]]
+                    anchors = None
+                    breakpoint()
             if key not in self.__dataclass_fields__:
                 self.new_field(key,type(text))
-            if type(text) is list:
-                self.__dict__[key] = CommentedSeq(text)
-            elif type(text) is int:
-                self.__dict__[key] = ScalarInt(text)
-            elif type(text) is float:
-                self.__dict__[key] = ScalarFloat(text)
-            elif type(text) is bool:
-                self.__dict__[key] = ScalarBoolean(text)
-            elif 'ruamel.yaml' in str(type(text)):
+            if 'ruamel.yaml' in str(type(text)):
                 self.__dict__[key] = text
+            elif self.__dataclass_fields__[key].type is list:
+                self.__dict__[key] = CommentedSeq(text)
+            elif self.__dataclass_fields__[key].type is int:
+                self.__dict__[key] = ScalarInt(text)
+            elif self.__dataclass_fields__[key].type is float:
+                self.__dict__[key] = ScalarFloat(text)
+            elif self.__dataclass_fields__[key].type is bool:
+                self.__dict__[key] = ScalarBoolean(text)
+            elif self.__dataclass_fields__[key].type is str:
+                self.__dict__[key] = PlainScalarString(text)
             else:
                 breakpoint()
                 sys.exit(f"Add {type(text)} for {key}")
@@ -204,7 +249,7 @@ class parser:
         for match in matches:
             if self.include is None: overwrite = 0
             else: overwrite = 1   
-            trace = Trace(Overwrite=overwrite,stage=self.stage,fields_on_the_fly=self.fields_on_the_fly,verbose=self.verbose)             
+            trace = Trace(Overwrite=overwrite,stage=self.stage,fields_on_the_fly=self.fields_on_the_fly,verbose=self.verbose,include=bool(overwrite))             
             trace.from_trace_block(match)
             if trace.variableName != '':
                 # Custom function to dump dataclass to dict conditional upon each field.repr parameter
@@ -213,6 +258,7 @@ class parser:
         self.ini_string = self.ini_string.strip()
     
     def parse_metadata(self):
+        self.configAnchors = {}
         mdLines = [l for l in self.ini_string.split('\n') 
                     if '=' in l and len(l.strip()) and
                     not l.strip().startswith('%') and
@@ -224,8 +270,9 @@ class parser:
             self.ini_string = self.ini_string.replace(l,'')
         temp = Trace(stage=None,fields_on_the_fly=True)
         for key,text in metadata.items():
-            temp.add_item(key=key,text=text)
-            self.config.metadata[key] = temp.__dict__[key]
+            temp.add_item(key=key,text=text,anchors=[('Metadata.'+key).replace('.','__'),self.configAnchors])
+            self.configAnchors['Metadata.'+key] = temp.__dict__[key]
+            self.config.Metadata[key] = temp.__dict__[key]
 
     def parse_includes(self):
         # Call self recursively to parse each include file
@@ -244,7 +291,6 @@ class parser:
         globalVars = {}
         # For writing to self.config
         globalDump = {}
-        anchors = {}
         name = None
         for gVar in globalTemp:
             self.ini_string = self.ini_string.replace(gVar,'')
@@ -260,8 +306,8 @@ class parser:
                     globalDump[key[1]][key[2]] = {}
                 globalVars[key[1]][key[2]].add_item(
                     key=key[3],text=text,
-                    anchors=[gVar[0].replace('.','__'),anchors])
-                anchors[gVar[0]] = globalVars[key[1]][key[2]].__dict__[key[3]]
+                    anchors=[gVar[0].replace('.','__'),self.configAnchors])
+                self.configAnchors[gVar[0]] = globalVars[key[1]][key[2]].__dict__[key[3]]
                 globalDump[key[1]][key[2]][key[3]] = globalVars[key[1]][key[2]].__dict__[key[3]]
             elif len(key) == 3:
                 if key[1] not in globalVars:
@@ -269,16 +315,16 @@ class parser:
                     globalDump[key[1]] = {}
                 globalVars[key[1]].add_item(
                     key=key[2],text=text,
-                    anchors=[gVar[0].replace('.','__'),anchors])
-                anchors[gVar[0]] = globalVars[key[1]].__dict__[key[2]]
+                    anchors=[gVar[0].replace('.','__'),self.configAnchors])
+                self.configAnchors[gVar[0]] = globalVars[key[1]].__dict__[key[2]]
                 globalDump[key[1]][key[2]] = globalVars[key[1]].__dict__[key[2]]
             elif len(key) == 2:
                 if key[1] not in globalVars:
                     globalVars[key[1]] = Trace(variableName=key[1],Overwrite=1,stage=None,fields_on_the_fly=True,repr=False)
                     globalVars[key[1]].add_item(
                         key=key[1],text=text,
-                        anchors=[gVar[0].replace('.','__'),anchors])
-                    anchors[gVar[0]] = globalVars[key[1]].__dict__[key[1]]
+                        anchors=[gVar[0].replace('.','__'),self.configAnchors])
+                    self.configAnchors[gVar[0]] = globalVars[key[1]].__dict__[key[1]]
                     globalDump[key[1]] = globalVars[key[1]].__dict__[key[1]]
         self.config.globalVars = globalDump
 
@@ -306,7 +352,7 @@ class parser:
 class CleanedText:
     text: str
     forPython: bool
-    PreserveComments: bool = False
+    Literal: bool = False
     bp: bool = False
     
     def __post_init__(self):
@@ -316,7 +362,7 @@ class CleanedText:
             self.clean_for_python_parsing()
     
     def clean_for_string_formatting(self):
-        if not self.PreserveComments:
+        if not self.Literal:
             # Exclude comments, but preserve percent signs within strings
             pattern = r"(\"[^\"]*\"|'[^']*')|%(.*)"
             def replacer(match):
@@ -326,6 +372,10 @@ class CleanedText:
                     return ''
             if self.text != '%':
                 self.text = re.sub(pattern, replacer, self.text)
+            if self.Literal is not None and self.text != '':
+                # Literal defaults to None (for non-specified parameters)
+                # If Literal is None, spaces are preserve but comments are removed
+                self.text = self.text.replace('\n','').replace(' ','')
         
         self.text = self.text.strip()
         if self.text != "''":
@@ -348,8 +398,8 @@ class CleanedText:
         if '\n' in self.text:
             breakpoint()
         self.text = '\n'.join([l.strip() for l in self.text.split('\n') if len(l.strip()) and not l.strip().startswith(';')])
-        # Convert set notation to list notation
-        self.text = self.text.replace('{','[').replace('}',']')
+        # Convert cell array notation to list notation and ensure all lists are 1D
+        self.text = self.text.replace('{[','[').replace(']}',']').replace('{','[').replace('}',']')
         # Replace functions names which are directly translatable to python
         self.text = self.replace_num2str(text=self.text)
         # Convert to standard pythonic dates
@@ -370,7 +420,7 @@ class CleanedText:
         pattern = r'\s*num2str\((.*?)\)\s*'
         def replacer(match):
             inner = match.group(1) 
-            return (f" {inner} ")
+            return (f" str({inner}) ")
         return(re.sub(pattern, replacer, text))
 
     def replace_datenum(self,text):
@@ -379,7 +429,10 @@ class CleanedText:
         pattern = r'datenum\((.*?)\)'  # capture inside quotes
         def get_date(m):
             inner = m.group(1)
-            if inner.startswith('"') or inner.startswith("'"):
+            if 'now' in inner:
+                # Use of now is bad form, set to distant future
+                d = datetime(2100,12,31,23,59) 
+            elif inner.startswith('"') or inner.startswith("'"):
                 inner = inner.strip('"').strip("'")
                 if '24:00' in inner:
                     inner = inner.replace('24:00','23:59')
