@@ -126,10 +126,19 @@ class Trace:
         nan = float('NaN')
         # if text.startswith("'") and (not text.startswith("'[") or 'Evaluate' in key):
         # Format strings, except in edge cases (e.g., inputFIleName, where they are provided as a list)
+        if key not in self.__dataclass_fields__:
+            if 'Evaluate' in key:
+                self.new_field(name=key,vtype=str,literal=True)
+            elif text.startswith("'") and (not text.startswith("'[") and not text.startswith("{")) and not any([d in key.lower() for d in ['date','calibration']]):
+                self.new_field(name=key,vtype=str,literal=None)
+            elif type(eval(text)) is int:
+                self.new_field(name=key,vtype=int,literal=False)
+            elif type(eval(text)) is float:
+                self.new_field(name=key,vtype=int,literal=False)
+            else:
+                self.new_field(name=key,vtype=list,literal=False)
         if (((key in self.__dataclass_fields__ and self.__dataclass_fields__[key].type is str) or text.startswith("'")) and
             (not text.startswith("'[") and not text.startswith("{")) or 'Evaluate' in key):
-            if key not in self.__dataclass_fields__:
-                self.new_field(key,str)
             if self.__dataclass_fields__[key].metadata['literal']:
                 text = CleanedText(text=text,forPython=False,Literal=True).text
                 self.__dict__[key] = LiteralScalarString(text)
@@ -165,7 +174,10 @@ class Trace:
                 self.new_field(key,type(text))
             
             if type(text) is list and self.__dataclass_fields__[key].type is str:
-                text = ''.join(text)
+                try:
+                    text = ''.join(text)
+                except:
+                    breakpoint()
             if 'ruamel.yaml' in str(type(text)):
                 self.__dict__[key] = text
             elif self.__dataclass_fields__[key].type is list:
