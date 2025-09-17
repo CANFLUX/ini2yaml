@@ -127,9 +127,13 @@ class Trace:
         # if text.startswith("'") and (not text.startswith("'[") or 'Evaluate' in key):
         # Format strings, except in edge cases (e.g., inputFIleName, where they are provided as a list)
         if key not in self.__dataclass_fields__:
+            if not text.startswith("'") and not text.startswith('"'):
+                text = text.split('%')[0]
             if 'Evaluate' in key:
                 self.new_field(name=key,vtype=str,literal=True)
-            elif text.startswith("'") and (not text.startswith("'[") and not text.startswith("{")) and not any([d in key.lower() for d in ['date','calibration']]):
+            elif text.startswith("'[") or text.startswith("{") or any([d in key.lower() for d in ['date','calibration']]):
+                self.new_field(name=key,vtype=list,literal=False)
+            elif text.startswith("'"):
                 self.new_field(name=key,vtype=str,literal=None)
             elif type(eval(text)) is int:
                 self.new_field(name=key,vtype=int,literal=False)
@@ -284,6 +288,7 @@ class parser:
             self.ini_string = self.ini_string.replace(l,'')
         temp = Trace(stage=None,fields_on_the_fly=True)
         for key,text in metadata.items():
+            text = text.split('%')[0].strip()
             temp.add_item(key=key,text=text,anchors=[('Metadata.'+key).replace('.','__'),self.configAnchors])
             self.configAnchors['Metadata.'+key] = temp.__dict__[key]
             self.config.Metadata[key] = temp.__dict__[key]
