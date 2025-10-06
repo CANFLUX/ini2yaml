@@ -68,6 +68,7 @@ class Trace:
     instrumentType: str = field(default='', metadata={'standard':True,'optional':False,'stage':'firststage','literal':False})
     measurementType: str = field(default='', metadata={'standard':True,'optional':False,'stage':'firststage','literal':False})
     minMax: list = field(default_factory=list, metadata={'standard':True,'optional':False,'stage':'firststage','literal':False})
+    zeroPt: list = field(default_factory=lambda:[-9999], metadata={'standard':True,'optional':False,'stage':'firststage','literal':False})
     # Required for second stage
     Evaluate: str = field(default='', metadata={'standard':True,'optional':False,'stage':'secondstage','literal':True})
     # Optional parameters
