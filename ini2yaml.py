@@ -186,6 +186,8 @@ class Trace:
             if 'ruamel.yaml' in str(type(text)):
                 self.__dict__[key] = text
             elif self.__dataclass_fields__[key].type is list:
+                if type(text) is not list:
+                    text = [text]
                 self.__dict__[key] = CommentedSeq(text)
             elif self.__dataclass_fields__[key].type is int:
                 self.__dict__[key] = ScalarInt(text)
